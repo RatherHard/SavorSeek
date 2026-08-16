@@ -1,0 +1,105 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# OS files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Editor and IDE state
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+
+# Logs and local diagnostics
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+coverage/
+.nyc_output/
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+**/doc/api/
+**/ios/Flutter/.last_build_id
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/android/app/debug
+**/android/app/profile
+**/android/app/release
+
+# Android / Gradle
+.gradle/
+local.properties
+captures/
+GeneratedPluginRegistrant.java
+*.apk
+*.aab
+*.ap_
+
+# iOS / macOS generated files
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/Runner/GeneratedPluginRegistrant.*
+**/macos/Pods/
+**/macos/.symlinks/
+**/macos/Flutter/GeneratedPluginRegistrant.*
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# Node / TypeScript / Supabase Edge Functions
+node_modules/
+dist/
+out/
+.next/
+.nuxt/
+.output/
+.turbo/
+.vercel/
+*.tsbuildinfo
+
+# Supabase local development
+supabase/.branches/
+supabase/.temp/
+supabase/.env
+supabase/functions/*/.env
+supabase/functions/*/.env.*
+
+# Claude Code local state
+.claude/settings.local.json
+.claude/*-local.json
