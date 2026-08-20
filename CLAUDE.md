@@ -72,7 +72,6 @@ SavorSeek 是一款以地图交互为核心、以智能 Agent 为主要能力的
     ├── 项目计划书.md
     ├── 开发日志.md
     ├── architecture/            # 架构、数据模型、Agent 流程文档
-    ├── product/                 # PRD、用户流程、验收标准
     └── savedprompt/             # 只读提示词归档，禁止修改
 ```
 

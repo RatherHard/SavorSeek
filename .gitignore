@@ -9,6 +9,10 @@
 *.jks
 *.keystore
 
+# 第三方服务密钥（高德 SDK Key 等），通过 --dart-define-from-file 注入，禁止入库
+*.env
+!*.env.example
+
 # OS files
 .DS_Store
 .AppleDouble
@@ -28,9 +32,14 @@ $RECYCLE.BIN/
 !.vscode/launch.json
 .idea/
 *.iml
+*.ipr
+*.iws
 *.swp
 *.swo
 *~
+.history/
+.atom/
+.svn/
 
 # Logs and local diagnostics
 *.log
@@ -41,7 +50,13 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 coverage/
+lcov.info
 .nyc_output/
+
+# Temporary files
+*.tmp
+tmp/
+.tmp/
 
 # Flutter / Dart
 .dart_tool/
@@ -51,6 +66,10 @@ coverage/
 .pub-cache/
 .pub/
 build/
+.build/
+.buildlog/
+migrate_working_dir/
+.widget_preview/
 **/doc/api/
 **/ios/Flutter/.last_build_id
 **/ios/Flutter/Flutter.framework
@@ -59,31 +78,62 @@ build/
 **/android/app/profile
 **/android/app/release
 
+# Flutter 符号化与混淆产物
+app.*.symbols
+app.*.map.json
+
 # Android / Gradle
 .gradle/
+.kotlin/
+.cxx/
 local.properties
+key.properties
 captures/
 GeneratedPluginRegistrant.java
+*.class
 *.apk
 *.aab
 *.ap_
+*.hprof
 
 # iOS / macOS generated files
 **/ios/Pods/
 **/ios/.symlinks/
+**/ios/Flutter/App.framework
 **/ios/Flutter/Generated.xcconfig
 **/ios/Flutter/flutter_export_environment.sh
+**/ios/Flutter/ephemeral/
+**/ios/Flutter/flutter_assets/
 **/ios/Runner/GeneratedPluginRegistrant.*
+**/ios/ServiceDefinitions.json
 **/macos/Pods/
 **/macos/.symlinks/
 **/macos/Flutter/GeneratedPluginRegistrant.*
+**/macos/Flutter/ephemeral/
+**/dgph
+**/*sync/
 DerivedData/
+.swiftpm/
+xcuserdata/
 *.xcuserstate
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
+*.mode1v3
+*.mode2v3
+*.pbxuser
+*.perspectivev3
+*.moved-aside
+.sconsign.dblite
+!default.pbxuser
+!default.mode1v3
+!default.mode2v3
+!default.perspectivev3
 
-# Node / TypeScript / Supabase Edge Functions
+# Node / TypeScript / Deno（Supabase Edge Functions）
 node_modules/
+.pnpm-store/
+.yarn/cache/
+.yarn/install-state.gz
 dist/
 out/
 .next/
@@ -92,6 +142,9 @@ out/
 .turbo/
 .vercel/
 *.tsbuildinfo
+.eslintcache
+.deno/
+deno.lock.tmp
 
 # Supabase local development
 supabase/.branches/
@@ -103,3 +156,4 @@ supabase/functions/*/.env.*
 # Claude Code local state
 .claude/settings.local.json
 .claude/*-local.json
+.claude/worktrees/
