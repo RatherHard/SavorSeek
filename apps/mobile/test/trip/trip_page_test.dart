@@ -10,7 +10,11 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      const MaterialApp(home: Scaffold(body: TripPage())),
+        const MaterialApp(
+          home: Scaffold(
+            body: TripPage(repository: InMemoryTripRepository()),
+          ),
+        ),
     );
     await tester.pumpAndSettle();
 

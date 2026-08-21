@@ -1,3 +1,9 @@
+import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart';
+
+import 'package:savorseek/app/config/supabase_config.dart';
+
 import 'trip_models.dart';
 
 abstract interface class TripRepository {
@@ -12,6 +18,34 @@ class InMemoryTripRepository implements TripRepository {
   @override
   Future<TripPlan?> loadPlan() async => plan;
 }
+
+/// Read-only fallback until Auth is available in the application shell.
+class SupabaseTripRepository implements TripRepository {
+  const SupabaseTripRepository();
+
+  @override
+  Future<TripPlan?> loadPlan() async {
+    if (!SupabaseConfig.isConfigured) {
+      throw TripRepositoryException(SupabaseConfig.missingMessage);
+    }
+    throw const TripRepositoryException(
+      '当前应用尚未建立认证会话，无法读取私有行程。',
+      kind: TripRepositoryErrorKind.unauthenticated,
+    );
+  }
+}
+
+class TripRepositoryException implements Exception {
+  const TripRepositoryException(this.message, {this.kind = TripRepositoryErrorKind.unavailable});
+
+  final String message;
+  final TripRepositoryErrorKind kind;
+
+  @override
+  String toString() => message;
+}
+
+enum TripRepositoryErrorKind { unavailable, unauthenticated, network, conflict }
 
 class DemoTripRepository implements TripRepository {
   const DemoTripRepository();
@@ -71,4 +105,25 @@ class DemoTripRepository implements TripRepository {
       ],
     );
   }
+}
+
+@immutable
+class TripPlanSummary {
+  const TripPlanSummary({required this.plan});
+
+  final TripPlan plan;
+
+  int get stopCount => plan.stopCount;
+
+  Duration get plannedDuration {
+    if (plan.days.isEmpty || plan.days.first.stops.isEmpty) {
+      return Duration.zero;
+    }
+    final stops = plan.days.expand((day) => day.stops).toList(growable: false);
+    final start = stops.map((stop) => stop.startAt).reduce((a, b) => a.isBefore(b) ? a : b);
+    final end = stops.map((stop) => stop.endAt).reduce((a, b) => a.isAfter(b) ? a : b);
+    return end.difference(start);
+  }
+
+  double get dayCount => math.max(plan.days.length, 1).toDouble();
 }

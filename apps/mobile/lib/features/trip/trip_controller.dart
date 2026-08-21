@@ -45,8 +45,10 @@ class TripController extends ChangeNotifier {
       } else {
         _setState(TripLoaded(plan));
       }
-    } on Exception catch (error) {
-      _setState(TripError(error.toString()));
+    } on TripRepositoryException catch (error) {
+      _setState(TripError(error.message));
+    } on Exception {
+      _setState(const TripError('行程服务暂时不可用，请稍后重试。'));
     }
   }
 

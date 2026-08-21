@@ -43,7 +43,8 @@ void main() {
       await tester.tap(find.text('行程'));
       await tester.pumpAndSettle();
 
-      expect(find.text('暂无行程'), findsOneWidget);
+      expect(find.text('行程暂时加载失败'), findsOneWidget);
+      expect(find.text('重新加载'), findsOneWidget);
     });
 
     testWidgets('点击我的展示四个职责分区', (tester) async {

@@ -36,6 +36,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   amap_map: 1.0.15
   x_amap_base: 1.0.3
+  supabase_flutter: ^2.9.0
 
 dev_dependencies:
   flutter_test:
