@@ -7,7 +7,7 @@ import 'trip_models.dart';
 import 'trip_repository.dart';
 
 class TripPage extends StatefulWidget {
-  const TripPage({super.key, this.repository = const InMemoryTripRepository()});
+  const TripPage({super.key, this.repository = const SupabaseTripRepository()});
 
   final TripRepository repository;
 
