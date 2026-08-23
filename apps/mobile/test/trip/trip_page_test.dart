@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:savorseek/features/auth/auth_service.dart';
 import 'package:savorseek/features/trip/trip_models.dart';
 import 'package:savorseek/features/trip/trip_page.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
@@ -10,11 +11,9 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-        const MaterialApp(
-          home: Scaffold(
-            body: TripPage(repository: InMemoryTripRepository()),
-          ),
-        ),
+      const MaterialApp(
+        home: Scaffold(body: TripPage(repository: InMemoryTripRepository())),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -74,9 +73,36 @@ void main() {
     expect(find.text('行程暂时加载失败'), findsOneWidget);
     expect(find.text('重新加载'), findsOneWidget);
   });
+
+  testWidgets('未认证时展示登录引导而非错误页', (tester) async {
+    // RLS 下无会话读取恒为空，这不是故障，UI 必须区别对待。
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TripPage(
+            repository: _UnauthenticatedRepository(),
+            auth: const UnavailableAuthService(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('登录后查看行程'), findsOneWidget);
+    expect(find.text('登录'), findsOneWidget);
+    expect(find.text('行程暂时加载失败'), findsNothing);
+  });
 }
 
 class _FailingRepository implements TripRepository {
   @override
   Future<TripPlan?> loadPlan() async => throw Exception('offline');
+}
+
+class _UnauthenticatedRepository implements TripRepository {
+  @override
+  Future<TripPlan?> loadPlan() async => throw const TripRepositoryException(
+    '登录后即可查看属于你的行程。',
+    kind: TripRepositoryErrorKind.unauthenticated,
+  );
 }

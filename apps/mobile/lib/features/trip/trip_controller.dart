@@ -22,9 +22,15 @@ final class TripLoaded extends TripViewState {
 }
 
 final class TripError extends TripViewState {
-  const TripError(this.message);
+  const TripError(
+    this.message, {
+    this.kind = TripRepositoryErrorKind.unavailable,
+  });
 
   final String message;
+
+  /// 错误类别，决定 UI 给出的下一步动作（未认证→登录，冲突→重新加载）。
+  final TripRepositoryErrorKind kind;
 }
 
 class TripController extends ChangeNotifier {
@@ -46,7 +52,7 @@ class TripController extends ChangeNotifier {
         _setState(TripLoaded(plan));
       }
     } on TripRepositoryException catch (error) {
-      _setState(TripError(error.message));
+      _setState(TripError(error.message, kind: error.kind));
     } on Exception {
       _setState(const TripError('行程服务暂时不可用，请稍后重试。'));
     }

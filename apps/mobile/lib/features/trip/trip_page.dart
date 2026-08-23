@@ -1,15 +1,22 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:savorseek/app/theme/design_tokens.dart';
+import 'package:savorseek/features/auth/auth_service.dart';
+import 'package:savorseek/features/auth/auth_sheet.dart';
 
 import 'trip_controller.dart';
 import 'trip_models.dart';
 import 'trip_repository.dart';
 
 class TripPage extends StatefulWidget {
-  const TripPage({super.key, this.repository = const SupabaseTripRepository()});
+  const TripPage({super.key, required this.repository, this.auth});
 
   final TripRepository repository;
+
+  /// 认证服务。为空时不提供登录入口，仅展示错误原因。
+  final AuthService? auth;
 
   @override
   State<TripPage> createState() => _TripPageState();
@@ -17,16 +24,22 @@ class TripPage extends StatefulWidget {
 
 class _TripPageState extends State<TripPage> {
   late final TripController _controller = TripController(widget.repository);
+  StreamSubscription<String?>? _authSubscription;
 
   @override
   void initState() {
     super.initState();
     _controller.addListener(_onStateChanged);
+    // 登录/登出后行程可见性会变，重新拉取而不是让用户手动刷新。
+    _authSubscription = widget.auth?.userIdChanges.listen((_) {
+      _controller.load();
+    });
     _controller.load();
   }
 
   @override
   void dispose() {
+    _authSubscription?.cancel();
     _controller
       ..removeListener(_onStateChanged)
       ..dispose();
@@ -34,6 +47,14 @@ class _TripPageState extends State<TripPage> {
   }
 
   void _onStateChanged() => setState(() {});
+
+  Future<void> _signIn() async {
+    final auth = widget.auth;
+    if (auth == null) return;
+    final didSignIn = await showAuthSheet(context, auth: auth);
+    // 会话流已订阅，登录成功会自动触发重载；此处仅兜住未订阅到的情况。
+    if (didSignIn && mounted) await _controller.load();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -45,6 +66,15 @@ class _TripPageState extends State<TripPage> {
           key: const ValueKey('empty'),
           onCreateTrip: () {},
         ),
+        TripError(
+          kind: TripRepositoryErrorKind.unauthenticated,
+          :final message,
+        ) =>
+          _TripSignInPrompt(
+            key: const ValueKey('signIn'),
+            message: message,
+            onSignIn: widget.auth == null ? null : _signIn,
+          ),
         TripError(:final message) => _TripError(
           key: const ValueKey('error'),
           message: message,
@@ -55,6 +85,65 @@ class _TripPageState extends State<TripPage> {
           plan: plan,
         ),
       },
+    );
+  }
+}
+
+/// 未认证态：RLS 下读取恒为空，这不是错误，因此单独呈现为登录引导。
+class _TripSignInPrompt extends StatelessWidget {
+  const _TripSignInPrompt({
+    super.key,
+    required this.message,
+    required this.onSignIn,
+  });
+
+  final String message;
+  final Future<void> Function()? onSignIn;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      key: key,
+      child: Padding(
+        padding: const EdgeInsets.all(AppTokens.spaceXl),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer,
+                shape: BoxShape.circle,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(AppTokens.spaceLg),
+                child: Icon(
+                  Icons.lock_person_outlined,
+                  size: 40,
+                  color: scheme.onPrimaryContainer,
+                ),
+              ),
+            ),
+            const SizedBox(height: AppTokens.spaceLg),
+            Text('登录后查看行程', style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: AppTokens.spaceSm),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: scheme.onSurfaceVariant,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: AppTokens.spaceLg),
+            FilledButton.icon(
+              onPressed: onSignIn,
+              icon: const Icon(Icons.login),
+              label: const Text('登录'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

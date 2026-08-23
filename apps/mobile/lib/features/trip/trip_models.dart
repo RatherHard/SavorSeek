@@ -1,6 +1,33 @@
 import 'package:flutter/foundation.dart';
 
-enum TripStopType { breakfast, lunch, dinner, snack, activity, rest }
+/// 行程项所属时段，取值与数据库 `trip_items.time_slot` 的 check 约束一一对应。
+///
+/// 刻意与库对齐而非另立一套 UI 枚举：任何有损映射都会让读回的行程在写回时
+/// 丢失原始时段，双向转换必须是恒等的。
+enum TripStopType {
+  breakfast('breakfast'),
+  morning('morning'),
+  lunch('lunch'),
+  afternoonTea('afternoon_tea'),
+  dinner('dinner'),
+  lateNight('late_night'),
+  flexible('flexible');
+
+  const TripStopType(this.wireName);
+
+  /// 数据库中的字面值。
+  final String wireName;
+}
+
+/// 行程项类型，对应 `trip_items.item_type`。休息项用 [TripItemType.break_] 表达。
+enum TripItemType {
+  placeVisit('place_visit'),
+  break_('break');
+
+  const TripItemType(this.wireName);
+
+  final String wireName;
+}
 
 enum TripMapState { available, unavailable }
 
@@ -13,6 +40,7 @@ class TripStop {
     required this.startAt,
     required this.endAt,
     required this.type,
+    this.itemType = TripItemType.placeVisit,
     this.note,
     this.isLocked = false,
   });
@@ -23,7 +51,13 @@ class TripStop {
   final DateTime startAt;
   final DateTime endAt;
   final TripStopType type;
+  final TripItemType itemType;
   final String? note;
+
+  /// 是否对用户呈现为「已锁定」。
+  ///
+  /// 库中拆为地点/时间/顺序三个标志，此处按任一为真合并：锁图标表达
+  /// 「此项受保护」，与用户直觉一致。写入侧仍按具体操作分别设置。
   final bool isLocked;
 
   TripStop copyWith({
@@ -33,6 +67,7 @@ class TripStop {
     DateTime? startAt,
     DateTime? endAt,
     TripStopType? type,
+    TripItemType? itemType,
     String? note,
     bool? isLocked,
   }) {
@@ -43,6 +78,7 @@ class TripStop {
       startAt: startAt ?? this.startAt,
       endAt: endAt ?? this.endAt,
       type: type ?? this.type,
+      itemType: itemType ?? this.itemType,
       note: note ?? this.note,
       isLocked: isLocked ?? this.isLocked,
     );

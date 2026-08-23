@@ -6,9 +6,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- usesCleartextTraffic：自建 Supabase 当前仅提供 http://，Android 9+
+         默认拦截明文请求，不声明会让 SDK 直接报连接失败，容易被误判为服务端
+         故障。这是开发期妥协——anon key、密码与 JWT 均明文传输，可被中间人
+         截获。服务端配好域名与 HTTPS 后必须移除本属性。 -->
     <application
         android:label="savorseek"
         android:name="${applicationName}"
+        android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">
         <!-- 高德地图 SDK Key。值由 app/build.gradle.kts 从 amap.env 读取后
              以 manifestPlaceholders 注入，Key 本身不出现在版本库中。
