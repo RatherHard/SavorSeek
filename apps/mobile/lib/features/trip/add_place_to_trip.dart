@@ -1,47 +1,61 @@
 import 'package:savorseek/features/places/place_models.dart';
 
-import 'trip_models.dart';
+import 'schedule_picker_sheet.dart';
 import 'trip_repository.dart';
+import 'trip_time_zone.dart';
 
-/// 把一个地点加入用户当前行程。
+/// 把地点加入行程的能力。
+///
+/// 抽成接口是为了让探索页不依赖 [SupabaseTripRepository] 这一具体实现——
+/// Widget 测试无法初始化 Supabase，只有依赖可替换才能覆盖排期与写入的分支。
+abstract interface class PlaceScheduler {
+  /// 读取排期上下文，供 UI 构造时间选择器。返回 null 表示还没有可加入的行程。
+  Future<TripSchedulingContext?> loadContext();
+
+  Future<void> add({
+    required Place place,
+    required TripSchedulingContext trip,
+    required ScheduleSelection selection,
+  });
+}
+
+/// 把一个地点按指定排期加入行程。
 ///
 /// 这是探索页与行程写入之间唯一的耦合点，单独成文件而非塞进 UI：写入涉及
 /// revision、position、时区折算三处易错约束，值得独立测试。
-class AddPlaceToTrip {
+class AddPlaceToTrip implements PlaceScheduler {
   const AddPlaceToTrip(this._repository);
 
   final SupabaseTripRepository _repository;
 
-  /// 默认排入的时段与时长。
-  ///
-  /// 暂固定为午餐档：本迭代不做时间选择 UI，先让闭环可用。Agent 编排接入后由
-  /// 排程逻辑决定，届时这两个常量应移除而非调大。
-  static const int _defaultStartHour = 12;
-  static const Duration _defaultDuration = Duration(hours: 1);
+  @override
+  Future<TripSchedulingContext?> loadContext() =>
+      _repository.findSchedulingContext();
 
-  Future<void> call(Place place) async {
-    final target = await _repository.findLatestTripTarget();
-    if (target == null) {
-      throw const TripRepositoryException('还没有可加入的行程，请先在行程页创建一个。');
-    }
-
+  @override
+  Future<void> add({
+    required Place place,
+    required TripSchedulingContext trip,
+    required ScheduleSelection selection,
+  }) async {
     // position 必须避开同一天已有项：(trip_day_id, position) 对非取消项唯一。
-    final position = await _repository.countItemsOnDay(target.tripDayId);
+    final position = await _repository.countItemsOnDay(selection.day.id);
 
-    final start = resolveStartInstant(
-      localDate: target.localDate,
-      timezone: target.timezone,
-      hour: _defaultStartHour,
+    final start = resolveInstant(
+      localDate: selection.day.localDate,
+      timezone: trip.timezone,
+      hour: selection.hour,
+      minute: selection.minute,
     );
 
     await _repository.addTripItem(
-      tripId: target.tripId,
-      expectedRevision: target.revision,
-      tripDayId: target.tripDayId,
+      tripId: trip.tripId,
+      expectedRevision: trip.revision,
+      tripDayId: selection.day.id,
       title: place.name,
       plannedStartAt: start,
-      plannedEndAt: start.add(_defaultDuration),
-      timeSlot: TripStopType.lunch,
+      plannedEndAt: start.add(selection.duration),
+      timeSlot: selection.timeSlot,
       position: position,
       placeId: place.id,
       placeSnapshot: buildSnapshot(place),
@@ -62,38 +76,24 @@ PlaceSnapshot buildSnapshot(Place place) {
   );
 }
 
-/// 计算行程项的开始时刻。
+/// 把「行程时区下的墙上时间」换算为真正的时刻。
 ///
 /// 库端要求「按行程时区折算后的日期」必须等于所属 trip_day 的 local_date
 /// （itinerary_schema.sql:232）。若直接用设备本地时区构造 DateTime，用户在
 /// 非行程时区（例如出差时改了手机时区）操作就会写入相邻一天并被拒。
 ///
-/// 只支持固定偏移的时区。Dart 核心库不含 IANA 时区数据库，而本项目当前所有行程
-/// 的时区都是 `Asia/Shanghai`（`trips.timezone` 的默认值）。遇到未知时区时抛错
-/// 而非静默按 UTC 处理——后者会写出差一天的数据，且难以察觉。
-DateTime resolveStartInstant({
+/// 换算委托给 [TripTimeZone]，它基于 IANA 时区数据库，因此有夏令时的目的地也能
+/// 算对。此前这里维护一张固定偏移表，会在夏令时切换日错一小时。
+DateTime resolveInstant({
   required DateTime localDate,
   required String timezone,
   required int hour,
+  int minute = 0,
 }) {
-  final offset = _fixedOffsets[timezone];
-  if (offset == null) {
-    throw TripRepositoryException('暂不支持时区 $timezone 的行程排期。');
-  }
-  // 先按 UTC 构造「墙上时间」，再减去偏移得到真正的时刻。
-  return DateTime.utc(
-    localDate.year,
-    localDate.month,
-    localDate.day,
-    hour,
-  ).subtract(offset);
+  return TripTimeZone.toInstant(
+    timezone: timezone,
+    localDate: localDate,
+    hour: hour,
+    minute: minute,
+  );
 }
-
-/// 已知的固定偏移时区。中国全境无夏令时，偏移恒为 +8。
-const Map<String, Duration> _fixedOffsets = {
-  'Asia/Shanghai': Duration(hours: 8),
-  'Asia/Hong_Kong': Duration(hours: 8),
-  'Asia/Macau': Duration(hours: 8),
-  'Asia/Taipei': Duration(hours: 8),
-  'UTC': Duration.zero,
-};

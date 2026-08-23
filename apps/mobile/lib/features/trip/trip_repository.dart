@@ -26,6 +26,55 @@ trip_days(
   )
 )''';
 
+/// 行程页可执行的写入能力。
+///
+/// 抽成接口而非让 UI 依赖 [SupabaseTripRepository]：Widget 测试无法初始化
+/// Supabase，只有依赖可替换才能覆盖改期的成功、冲突与失败分支。
+abstract interface class TripWriter {
+  Future<TripWriteResult> rescheduleTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    required String tripDayId,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    String? idempotencyKey,
+  });
+
+  /// 取消行程项（软删除）。记录与快照保留，可经 [restoreTripItem] 恢复。
+  Future<TripWriteResult> cancelTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  });
+
+  /// 把已取消的项恢复为待安排。
+  Future<TripWriteResult> restoreTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  });
+
+  /// 彻底删除行程项。不可恢复，调用方须先向用户确认。
+  Future<int> deleteTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  });
+
+  /// 更改行程时区。已排入的项保留当地钟点，UTC 时刻由服务端重算。
+  Future<int> changeTripTimezone({
+    required String tripId,
+    required int expectedRevision,
+    required String timezone,
+    String? idempotencyKey,
+  });
+}
+
 abstract interface class TripRepository {
   Future<TripPlan?> loadPlan();
 }
@@ -59,7 +108,7 @@ class UnavailableTripRepository implements TripRepository {
 /// 读写路径不对称，这是本类的核心约束：`authenticated` 角色对三张表只有
 /// `select`，insert/update/delete 已全部 revoke（见 itinerary_schema.sql:310），
 /// 因此写入必须走 `security definer` RPC，直接 `.insert()` 必然被拒。
-class SupabaseTripRepository implements TripRepository {
+class SupabaseTripRepository implements TripRepository, TripWriter {
   SupabaseTripRepository({required this.auth, SupabaseClient? client})
     : _client = client ?? Supabase.instance.client;
 
@@ -180,6 +229,117 @@ class SupabaseTripRepository implements TripRepository {
     );
   }
 
+  /// 改期：调整行程项的日期、时间与时段。
+  ///
+  /// 允许跨天移动（[tripDayId] 传目标日）。不接受 position 参数：跨天后的新位置
+  /// 由服务端按目标日实际占用计算，客户端算出的值在并发下必然过期。
+  ///
+  /// 时间必须已按行程时区折算（见 `TripTimeZone.toInstant`）：库端校验开始时刻
+  /// 折回行程时区后的日期须等于目标日的 local_date，不符返回 23514。
+  @override
+  Future<TripWriteResult> rescheduleTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    required String tripDayId,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('reschedule_trip_item', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_trip_item_id': tripItemId,
+      'p_trip_day_id': tripDayId,
+      'p_planned_start_at': plannedStartAt.toUtc().toIso8601String(),
+      'p_planned_end_at': plannedEndAt.toUtc().toIso8601String(),
+      'p_time_slot': timeSlot.wireName,
+    });
+    return TripWriteResult(
+      id: (payload['trip_item'] as Map<String, dynamic>)['id'] as String,
+      revision: (payload['revision'] as num).toInt(),
+    );
+  }
+
+  @override
+  Future<TripWriteResult> cancelTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('cancel_trip_item', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_trip_item_id': tripItemId,
+    });
+    return TripWriteResult(
+      id: (payload['trip_item'] as Map<String, dynamic>)['id'] as String,
+      revision: (payload['revision'] as num).toInt(),
+    );
+  }
+
+  @override
+  Future<TripWriteResult> restoreTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('restore_trip_item', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_trip_item_id': tripItemId,
+    });
+    return TripWriteResult(
+      id: (payload['trip_item'] as Map<String, dynamic>)['id'] as String,
+      revision: (payload['revision'] as num).toInt(),
+    );
+  }
+
+  /// 返回删除后行程的最新 revision。不返回项本身——它已经不存在了。
+  @override
+  Future<int> deleteTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('delete_trip_item', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_trip_item_id': tripItemId,
+    });
+    return (payload['revision'] as num).toInt();
+  }
+
+  /// 返回受影响的行程项数。
+  @override
+  Future<int> changeTripTimezone({
+    required String tripId,
+    required int expectedRevision,
+    required String timezone,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('change_trip_timezone', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_timezone': timezone,
+    });
+    return (payload['items_shifted'] as num?)?.toInt() ?? 0;
+  }
+
   /// 添加一个行程项。时间以 UTC 序列化，服务端列为 timestamptz。
   ///
   /// 两类项的必填项互斥，由库端 trigger 强制（itinerary_schema.sql:236-262）：
@@ -229,20 +389,21 @@ class SupabaseTripRepository implements TripRepository {
     );
   }
 
-  /// 把一个地点加入「最近更新的行程」时所需的定位信息。
+  /// 读取「最近更新的行程」的排期上下文：行程本身加上它的全部日期。
   ///
   /// 为什么不复用 [loadPlan]：`TripPlan` 是展示模型，不含 `revision` 与
   /// `trip_days.id`，而 `add_trip_item` 两者都必需。这里单独取最小字段集，避免
   /// 为了一次写入把并发控制字段渗进 UI 模型。
   ///
   /// 返回 null 表示用户还没有行程或行程还没有任何一天，调用方应引导其先创建。
-  Future<TripTarget?> findLatestTripTarget() async {
+  Future<TripSchedulingContext?> findSchedulingContext() async {
     _requireSession();
     try {
       final rows = await _client
           .from('trips')
           .select(
-            'id, revision, timezone, start_date, trip_days(id, local_date)',
+            'id, revision, timezone, start_date, end_date, '
+            'trip_days(id, local_date)',
           )
           .order('updated_at', ascending: false)
           .limit(1);
@@ -251,20 +412,20 @@ class SupabaseTripRepository implements TripRepository {
       final days =
           [...?(row['trip_days'] as List?)]
               .whereType<Map<String, dynamic>>()
+              .map(
+                (day) => TripDayRef(
+                  id: day['id'] as String,
+                  localDate: DateTime.parse(day['local_date'] as String),
+                ),
+              )
               .toList()
-            ..sort(
-              (a, b) => (a['local_date'] as String).compareTo(
-                b['local_date'] as String,
-              ),
-            );
+            ..sort((a, b) => a.localDate.compareTo(b.localDate));
       if (days.isEmpty) return null;
-      final first = days.first;
-      return TripTarget(
+      return TripSchedulingContext(
         tripId: row['id'] as String,
         revision: (row['revision'] as num).toInt(),
         timezone: row['timezone'] as String,
-        tripDayId: first['id'] as String,
-        localDate: DateTime.parse(first['local_date'] as String),
+        days: days,
       );
     } on PostgrestException catch (error) {
       throw _translate(error);
@@ -334,10 +495,11 @@ class SupabaseTripRepository implements TripRepository {
     final days = [...?(row['trip_days'] as List?)]
         .whereType<Map<String, dynamic>>()
         .map((day) {
+          // 已取消的项仍要展示：用户决策（2026-08-24）是软删除后可见且可恢复，
+          // 过滤掉就没有恢复入口了。排序时沉到当天末尾——它们不占 position
+          // （唯一索引排除 cancelled），混在中间会打乱可执行项的顺序感。
           final items = [...?(day['trip_items'] as List?)]
               .whereType<Map<String, dynamic>>()
-              // 已取消的项不参与展示，位置唯一约束也仅覆盖非取消项。
-              .where((item) => item['status'] != 'cancelled')
               .toList()
             ..sort(_byPosition);
           return {...day, 'trip_items': items};
@@ -351,6 +513,12 @@ class SupabaseTripRepository implements TripRepository {
   }
 
   static int _byPosition(Map<String, dynamic> a, Map<String, dynamic> b) {
+    // 已取消的项一律排在后面：它们不参与 position 排序（唯一索引排除 cancelled），
+    // 按 position 混排会让两个不同的项显示为同一位置。
+    final aCancelled = a['status'] == 'cancelled';
+    final bCancelled = b['status'] == 'cancelled';
+    if (aCancelled != bCancelled) return aCancelled ? 1 : -1;
+
     final byPosition = ((a['position'] as num?) ?? 0).compareTo(
       (b['position'] as num?) ?? 0,
     );
@@ -462,15 +630,25 @@ class CreateTripKeys {
       _dayKeys.putIfAbsent(offset, generateUuidV4);
 }
 
-/// 写入行程项所需的目标定位。
+/// 行程中的一天，供排期时选择。
 @immutable
-class TripTarget {
-  const TripTarget({
+class TripDayRef {
+  const TripDayRef({required this.id, required this.localDate});
+
+  final String id;
+
+  /// 该天在行程时区下的日期。
+  final DateTime localDate;
+}
+
+/// 写入行程项所需的排期上下文。
+@immutable
+class TripSchedulingContext {
+  const TripSchedulingContext({
     required this.tripId,
     required this.revision,
     required this.timezone,
-    required this.tripDayId,
-    required this.localDate,
+    required this.days,
   });
 
   final String tripId;
@@ -482,8 +660,27 @@ class TripTarget {
   /// 所属 trip_day 的 local_date（itinerary_schema.sql:232），因此排时间时不能
   /// 用设备本地时区。
   final String timezone;
-  final String tripDayId;
-  final DateTime localDate;
+
+  /// 行程的全部日期，已按 local_date 升序。
+  ///
+  /// 时间选择只能落在这些日期上：库端约束要求项归属的那一天必须已存在，
+  /// 任意日期会被 trigger 拒绝。
+  final List<TripDayRef> days;
+
+  DateTime get firstDate => days.first.localDate;
+  DateTime get lastDate => days.last.localDate;
+
+  /// 找出某个日期对应的行程日。不存在时返回 null。
+  TripDayRef? dayOn(DateTime localDate) {
+    for (final day in days) {
+      if (day.localDate.year == localDate.year &&
+          day.localDate.month == localDate.month &&
+          day.localDate.day == localDate.day) {
+        return day;
+      }
+    }
+    return null;
+  }
 }
 
 @immutable

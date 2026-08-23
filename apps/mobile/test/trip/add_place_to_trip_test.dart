@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savorseek/features/places/place_models.dart';
 import 'package:savorseek/features/trip/add_place_to_trip.dart';
-import 'package:savorseek/features/trip/trip_repository.dart';
+import 'package:savorseek/features/trip/trip_time_zone.dart';
 
 Place buildPlace({
   double? latitude = 38.914003,
@@ -19,6 +19,8 @@ Place buildPlace({
 }
 
 void main() {
+  setUpAll(TripTimeZone.ensureInitialized);
+
   group('buildSnapshot', () {
     test('产出满足库端约束的快照', () {
       final json = buildSnapshot(buildPlace()).toJson();
@@ -44,9 +46,9 @@ void main() {
     });
   });
 
-  group('resolveStartInstant', () {
+  group('resolveInstant', () {
     test('按行程时区折算，而非设备本地时区', () {
-      final start = resolveStartInstant(
+      final start = resolveInstant(
         localDate: DateTime(2026, 9, 1),
         timezone: 'Asia/Shanghai',
         hour: 12,
@@ -60,7 +62,7 @@ void main() {
 
     test('折算结果在行程时区下仍是同一天（含边界小时）', () {
       for (final hour in [0, 8, 12, 23]) {
-        final start = resolveStartInstant(
+        final start = resolveInstant(
           localDate: DateTime(2026, 9, 1),
           timezone: 'Asia/Shanghai',
           hour: hour,
@@ -72,7 +74,7 @@ void main() {
     });
 
     test('UTC 行程不做偏移', () {
-      final start = resolveStartInstant(
+      final start = resolveInstant(
         localDate: DateTime(2026, 9, 1),
         timezone: 'UTC',
         hour: 12,
@@ -81,15 +83,67 @@ void main() {
       expect(start, DateTime.utc(2026, 9, 1, 12));
     });
 
-    test('未知时区抛错而非静默按 UTC 处理', () {
-      // 静默降级会写出差一天的数据，且要等库端 23514 才暴露。
+    test('分钟参与折算，不被丢弃', () {
+      // 时分选择的意义就在于此：只取小时会让 19:30 静默变成 19:00。
+      final start = resolveInstant(
+        localDate: DateTime(2026, 9, 1),
+        timezone: 'Asia/Shanghai',
+        hour: 19,
+        minute: 30,
+      );
+
+      expect(start, DateTime.utc(2026, 9, 1, 11, 30));
+      final wallClock = start.add(const Duration(hours: 8));
+      expect(wallClock.hour, 19);
+      expect(wallClock.minute, 30);
+      expect(wallClock.day, 1);
+    });
+
+    test('跨日边界：23:30 起算仍归属所选那天', () {
+      final start = resolveInstant(
+        localDate: DateTime(2026, 9, 1),
+        timezone: 'Asia/Shanghai',
+        hour: 23,
+        minute: 30,
+      );
+
+      expect(start, DateTime.utc(2026, 9, 1, 15, 30));
+      final wallClock = start.add(const Duration(hours: 8));
+      expect(wallClock.day, 1);
+      expect(wallClock.hour, 23);
+      expect(wallClock.minute, 30);
+    });
+
+    test('有夏令时的时区已可支持（此前固定偏移表不支持）', () {
+      // 纽约夏季 -04:00：12:00 当地即 UTC 16:00。
       expect(
-        () => resolveStartInstant(
-          localDate: DateTime(2026, 9, 1),
+        resolveInstant(
+          localDate: DateTime(2026, 7, 15),
           timezone: 'America/New_York',
           hour: 12,
         ),
-        throwsA(isA<TripRepositoryException>()),
+        DateTime.utc(2026, 7, 15, 16),
+      );
+      // 冬季 -05:00，同一钟点对应不同时刻——固定偏移表必然算错其中之一。
+      expect(
+        resolveInstant(
+          localDate: DateTime(2026, 1, 15),
+          timezone: 'America/New_York',
+          hour: 12,
+        ),
+        DateTime.utc(2026, 1, 15, 17),
+      );
+    });
+
+    test('无法识别的时区抛错而非静默按 UTC 处理', () {
+      // 静默降级会写出差一天的数据，且要等库端 23514 才暴露。
+      expect(
+        () => resolveInstant(
+          localDate: DateTime(2026, 9, 1),
+          timezone: 'Mars/Olympus',
+          hour: 12,
+        ),
+        throwsA(isA<TripTimeZoneException>()),
       );
     });
   });

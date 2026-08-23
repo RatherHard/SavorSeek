@@ -29,6 +29,21 @@ enum TripItemType {
   final String wireName;
 }
 
+/// 行程项状态，对应 `trip_items.status` 的 check 约束。
+enum TripItemStatus {
+  planned('planned'),
+  completed('completed'),
+  skipped('skipped'),
+  cancelled('cancelled');
+
+  const TripItemStatus(this.wireName);
+
+  final String wireName;
+
+  /// 终态项不可再改期或改状态（库端 trigger 亦如此约束）。
+  bool get isTerminal => this != TripItemStatus.planned;
+}
+
 enum TripMapState { available, unavailable }
 
 @immutable
@@ -43,11 +58,18 @@ class TripStop {
     this.itemType = TripItemType.placeVisit,
     this.note,
     this.isLocked = false,
+    this.tripDayId,
+    this.status = TripItemStatus.planned,
   });
 
   final String id;
   final String title;
   final String subtitle;
+
+  /// 行程时区下的墙上时间，即「当地钟面上显示什么」。
+  ///
+  /// 不是设备本地时间：跨时区行程若按设备时区展示，用户在国内看东京行程会看到
+  /// 18:00，而当地实际是 19:00。改期时也以此为初值。
   final DateTime startAt;
   final DateTime endAt;
   final TripStopType type;
@@ -60,6 +82,20 @@ class TripStop {
   /// 「此项受保护」，与用户直觉一致。写入侧仍按具体操作分别设置。
   final bool isLocked;
 
+  /// 所属行程日的 id，改期时作为「当前所在那天」的标识。
+  ///
+  /// 可空是因为演示数据与纯 UI 测试构造的 stop 没有真实归属；此时改期入口禁用。
+  final String? tripDayId;
+
+  /// 项的状态。终态项不可改期（库端亦会拒绝）。
+  final TripItemStatus status;
+
+  /// 是否可改期。
+  ///
+  /// 终态项改期没有意义且会让历史失真；缺少 tripDayId 时无法构造写入请求。
+  bool get canReschedule =>
+      tripDayId != null && status == TripItemStatus.planned;
+
   TripStop copyWith({
     String? id,
     String? title,
@@ -70,6 +106,8 @@ class TripStop {
     TripItemType? itemType,
     String? note,
     bool? isLocked,
+    String? tripDayId,
+    TripItemStatus? status,
   }) {
     return TripStop(
       id: id ?? this.id,
@@ -81,6 +119,8 @@ class TripStop {
       itemType: itemType ?? this.itemType,
       note: note ?? this.note,
       isLocked: isLocked ?? this.isLocked,
+      tripDayId: tripDayId ?? this.tripDayId,
+      status: status ?? this.status,
     );
   }
 }
@@ -91,14 +131,27 @@ class TripDay {
     required this.date,
     required this.label,
     required List<TripStop> stops,
+    this.id,
   }) : stops = List.unmodifiable(stops);
 
+  /// `trip_days.id`。改期时作为目标日标识。
+  ///
+  /// 可空是因为演示数据与纯 UI 测试构造的 day 没有真实归属。
+  final String? id;
+
+  /// 行程时区下的自然日。
   final DateTime date;
   final String label;
   final List<TripStop> stops;
 
-  TripDay copyWith({DateTime? date, String? label, List<TripStop>? stops}) {
+  TripDay copyWith({
+    String? id,
+    DateTime? date,
+    String? label,
+    List<TripStop>? stops,
+  }) {
     return TripDay(
+      id: id ?? this.id,
       date: date ?? this.date,
       label: label ?? this.label,
       stops: stops ?? this.stops,
@@ -115,6 +168,8 @@ class TripPlan {
     required List<TripDay> days,
     this.mapState = TripMapState.unavailable,
     this.updatedAt,
+    this.timezone = 'Asia/Shanghai',
+    this.revision = 1,
   }) : days = List.unmodifiable(days);
 
   final String id;
@@ -123,6 +178,12 @@ class TripPlan {
   final List<TripDay> days;
   final TripMapState mapState;
   final DateTime? updatedAt;
+
+  /// 行程时区（IANA 标识）。所有行程项时间均按此时区呈现。
+  final String timezone;
+
+  /// 乐观并发控制的修订号，改期时作为 expected_revision。
+  final int revision;
 
   int get stopCount => days.fold(0, (count, day) => count + day.stops.length);
 
@@ -133,6 +194,8 @@ class TripPlan {
     List<TripDay>? days,
     TripMapState? mapState,
     DateTime? updatedAt,
+    String? timezone,
+    int? revision,
   }) {
     return TripPlan(
       id: id ?? this.id,
@@ -141,6 +204,8 @@ class TripPlan {
       days: days ?? this.days,
       mapState: mapState ?? this.mapState,
       updatedAt: updatedAt ?? this.updatedAt,
+      timezone: timezone ?? this.timezone,
+      revision: revision ?? this.revision,
     );
   }
 }

@@ -1,0 +1,274 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:savorseek/features/trip/trip_mapper.dart';
+import 'package:savorseek/features/trip/trip_models.dart';
+import 'package:savorseek/features/trip/trip_page.dart';
+import 'package:savorseek/features/trip/trip_repository.dart';
+import 'package:savorseek/features/trip/trip_time_zone.dart';
+
+/// 记录改期调用的仓库。同时实现读与写，模拟真实仓库的能力组合。
+class FakeWritableRepository implements TripRepository, TripWriter {
+  FakeWritableRepository(this._plan);
+
+  TripPlan _plan;
+  final List<Map<String, Object?>> calls = [];
+  TripRepositoryException? error;
+
+  @override
+  Future<TripPlan?> loadPlan() async => _plan;
+
+  @override
+  Future<TripWriteResult> rescheduleTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    required String tripDayId,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    String? idempotencyKey,
+  }) async {
+    calls.add({
+      'tripId': tripId,
+      'expectedRevision': expectedRevision,
+      'tripItemId': tripItemId,
+      'tripDayId': tripDayId,
+      'startUtc': plannedStartAt.toUtc().toIso8601String(),
+      'endUtc': plannedEndAt.toUtc().toIso8601String(),
+      'timeSlot': timeSlot.wireName,
+    });
+    final failure = error;
+    if (failure != null) throw failure;
+    _plan = _plan.copyWith(revision: _plan.revision + 1);
+    return TripWriteResult(id: tripItemId, revision: _plan.revision);
+  }
+
+  @override
+  Future<TripWriteResult> cancelTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  }) async {
+    calls.add({'op': 'cancel', 'tripItemId': tripItemId});
+    final failure = error;
+    if (failure != null) throw failure;
+    _plan = _plan.copyWith(revision: _plan.revision + 1);
+    return TripWriteResult(id: tripItemId, revision: _plan.revision);
+  }
+
+  @override
+  Future<TripWriteResult> restoreTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  }) async {
+    calls.add({'op': 'restore', 'tripItemId': tripItemId});
+    final failure = error;
+    if (failure != null) throw failure;
+    _plan = _plan.copyWith(revision: _plan.revision + 1);
+    return TripWriteResult(id: tripItemId, revision: _plan.revision);
+  }
+
+  @override
+  Future<int> deleteTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  }) async {
+    calls.add({'op': 'delete', 'tripItemId': tripItemId});
+    final failure = error;
+    if (failure != null) throw failure;
+    _plan = _plan.copyWith(revision: _plan.revision + 1);
+    return _plan.revision;
+  }
+
+  @override
+  Future<int> changeTripTimezone({
+    required String tripId,
+    required int expectedRevision,
+    required String timezone,
+    String? idempotencyKey,
+  }) async {
+    calls.add({'op': 'timezone', 'timezone': timezone});
+    final failure = error;
+    if (failure != null) throw failure;
+    _plan = _plan.copyWith(timezone: timezone, revision: _plan.revision + 1);
+    return _plan.days.fold<int>(0, (sum, day) => sum + day.stops.length);
+  }
+}
+
+/// 只读仓库，用于验证无写入能力时不给出改期入口。
+class ReadOnlyRepository implements TripRepository {
+  ReadOnlyRepository(this.plan);
+
+  final TripPlan plan;
+
+  @override
+  Future<TripPlan?> loadPlan() async => plan;
+}
+
+/// 两日东京行程，首日 19:00 有一项。
+TripPlan buildTokyoPlan() => TripMapper.planFromRow({
+  'id': 'trip-tokyo',
+  'title': '东京寻味',
+  'timezone': 'Asia/Tokyo',
+  'revision': 4,
+  'updated_at': '2026-08-24T02:00:00+00:00',
+  'trip_days': [
+    {
+      'id': 'day-1',
+      'local_date': '2026-09-01',
+      'trip_items': [
+        {
+          'id': 'item-1',
+          'trip_day_id': 'day-1',
+          'item_type': 'place_visit',
+          'title': '寿司大',
+          'planned_start_at': '2026-09-01T10:00:00+00:00',
+          'planned_end_at': '2026-09-01T11:00:00+00:00',
+          'time_slot': 'dinner',
+          'position': 0,
+          'status': 'planned',
+        },
+      ],
+    },
+    {'id': 'day-2', 'local_date': '2026-09-02', 'trip_items': <dynamic>[]},
+  ],
+});
+
+Widget wrap(TripRepository repository) =>
+    MaterialApp(home: Scaffold(body: TripPage(repository: repository)));
+
+void main() {
+  setUpAll(TripTimeZone.ensureInitialized);
+
+  testWidgets('行程项显示行程当地时间，并给出改期入口', (tester) async {
+    await tester.pumpWidget(wrap(FakeWritableRepository(buildTokyoPlan())));
+    await tester.pumpAndSettle();
+
+    // 东京 19:00，而非设备时区折算出的 18:00。
+    expect(find.text('晚餐 · 19:00–20:00'), findsOneWidget);
+    expect(find.byIcon(Icons.more_vert), findsOneWidget);
+  });
+
+  testWidgets('只读仓库不给出改期入口', (tester) async {
+    await tester.pumpWidget(wrap(ReadOnlyRepository(buildTokyoPlan())));
+    await tester.pumpAndSettle();
+
+    // 点了没有反馈的入口比没有入口更糟。
+    expect(find.byIcon(Icons.more_vert), findsNothing);
+  });
+
+  testWidgets('改期表单以现有排期为初值', (tester) async {
+    await tester.pumpWidget(wrap(FakeWritableRepository(buildTokyoPlan())));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('改期'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('调整到店时间'), findsOneWidget);
+    expect(find.text('保存改期'), findsOneWidget);
+    // 初值取自当前排期。19:00 在时间轴与表单中各出现一次（表单浮于列表之上），
+    // 故用 findsWidgets；日期只在表单内出现。
+    expect(find.text('19:00'), findsWidgets);
+    expect(find.text('2026-09-01（周二）'), findsOneWidget);
+    // 时长初值为 1 小时，对应选中的时长档位。
+    expect(find.text('1 小时'), findsWidgets);
+  });
+
+  testWidgets('提交改期时按行程时区折算并带上 expected_revision', (tester) async {
+    final repository = FakeWritableRepository(buildTokyoPlan());
+    await tester.pumpWidget(wrap(repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('改期'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('保存改期'));
+    await tester.pumpAndSettle();
+
+    expect(repository.calls, hasLength(1));
+    final call = repository.calls.single;
+    expect(call['tripItemId'], 'item-1');
+    expect(call['tripDayId'], 'day-1');
+    expect(call['expectedRevision'], 4);
+    // 东京 19:00 折算为 UTC 10:00——按设备时区（UTC+8）会错成 11:00。
+    expect(call['startUtc'], '2026-09-01T10:00:00.000Z');
+    expect(call['endUtc'], '2026-09-01T11:00:00.000Z');
+    expect(call['timeSlot'], 'dinner');
+  });
+
+  testWidgets('冲突时给出提示', (tester) async {
+    final repository = FakeWritableRepository(buildTokyoPlan())
+      ..error = const TripRepositoryException(
+        '行程已被其他操作更新，请重新加载后再试。',
+        kind: TripRepositoryErrorKind.conflict,
+      );
+    await tester.pumpWidget(wrap(repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('改期'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('保存改期'));
+    await tester.pump();
+
+    expect(find.textContaining('请重新加载'), findsOneWidget);
+  });
+
+  testWidgets('取消改期不产生写入', (tester) async {
+    final repository = FakeWritableRepository(buildTokyoPlan());
+    await tester.pumpWidget(wrap(repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('改期'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+
+    expect(repository.calls, isEmpty);
+  });
+
+  testWidgets('终态项不可点', (tester) async {
+    final plan = TripMapper.planFromRow({
+      'id': 'trip-1',
+      'title': '已完成行程',
+      'timezone': 'Asia/Tokyo',
+      'revision': 2,
+      'trip_days': [
+        {
+          'id': 'day-1',
+          'local_date': '2026-09-01',
+          'trip_items': [
+            {
+              'id': 'item-done',
+              'trip_day_id': 'day-1',
+              'item_type': 'place_visit',
+              'title': '已到访的店',
+              'planned_start_at': '2026-09-01T10:00:00+00:00',
+              'planned_end_at': '2026-09-01T11:00:00+00:00',
+              'time_slot': 'dinner',
+              'position': 0,
+              'status': 'completed',
+            },
+          ],
+        },
+      ],
+    });
+
+    await tester.pumpWidget(wrap(FakeWritableRepository(plan)));
+    await tester.pumpAndSettle();
+
+    // 给已完成的到访改时间会让历史失真，库端也会拒绝。
+    expect(find.byIcon(Icons.more_vert), findsNothing);
+  });
+}
