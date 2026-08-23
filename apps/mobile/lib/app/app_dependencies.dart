@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 
 import 'package:savorseek/app/supabase/supabase_bootstrap.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
-import 'package:savorseek/features/places/place_models.dart';
 import 'package:savorseek/features/places/place_repository.dart';
 import 'package:savorseek/features/trip/add_place_to_trip.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
@@ -17,7 +16,7 @@ class AppDependencies {
     required this.auth,
     required this.tripRepository,
     this.placeRepository = const UnavailablePlaceRepository(),
-    this.onAddPlaceToTrip,
+    this.scheduler,
     this.bootstrapMessage,
   });
 
@@ -40,7 +39,7 @@ class AppDependencies {
       auth: auth,
       tripRepository: tripRepository,
       placeRepository: SupabasePlaceRepository(auth: auth),
-      onAddPlaceToTrip: AddPlaceToTrip(tripRepository).call,
+      scheduler: AddPlaceToTrip(tripRepository),
     );
   }
 
@@ -48,8 +47,8 @@ class AppDependencies {
   final TripRepository tripRepository;
   final PlaceRepository placeRepository;
 
-  /// 把地点加入行程。未接入后端时为空，探索页据此禁用按钮。
-  final Future<void> Function(Place place)? onAddPlaceToTrip;
+  /// 把地点加入行程的能力。未接入后端时为空，探索页据此禁用按钮。
+  final PlaceScheduler? scheduler;
 
   /// 初始化未成功时面向用户的原因；成功时为 null。
   final String? bootstrapMessage;

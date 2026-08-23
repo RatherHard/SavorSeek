@@ -1,47 +1,60 @@
 import 'package:savorseek/features/places/place_models.dart';
 
-import 'trip_models.dart';
+import 'schedule_picker_sheet.dart';
 import 'trip_repository.dart';
 
-/// 把一个地点加入用户当前行程。
+/// 把地点加入行程的能力。
+///
+/// 抽成接口是为了让探索页不依赖 [SupabaseTripRepository] 这一具体实现——
+/// Widget 测试无法初始化 Supabase，只有依赖可替换才能覆盖排期与写入的分支。
+abstract interface class PlaceScheduler {
+  /// 读取排期上下文，供 UI 构造时间选择器。返回 null 表示还没有可加入的行程。
+  Future<TripSchedulingContext?> loadContext();
+
+  Future<void> add({
+    required Place place,
+    required TripSchedulingContext trip,
+    required ScheduleSelection selection,
+  });
+}
+
+/// 把一个地点按指定排期加入行程。
 ///
 /// 这是探索页与行程写入之间唯一的耦合点，单独成文件而非塞进 UI：写入涉及
 /// revision、position、时区折算三处易错约束，值得独立测试。
-class AddPlaceToTrip {
+class AddPlaceToTrip implements PlaceScheduler {
   const AddPlaceToTrip(this._repository);
 
   final SupabaseTripRepository _repository;
 
-  /// 默认排入的时段与时长。
-  ///
-  /// 暂固定为午餐档：本迭代不做时间选择 UI，先让闭环可用。Agent 编排接入后由
-  /// 排程逻辑决定，届时这两个常量应移除而非调大。
-  static const int _defaultStartHour = 12;
-  static const Duration _defaultDuration = Duration(hours: 1);
+  @override
+  Future<TripSchedulingContext?> loadContext() =>
+      _repository.findSchedulingContext();
 
-  Future<void> call(Place place) async {
-    final target = await _repository.findLatestTripTarget();
-    if (target == null) {
-      throw const TripRepositoryException('还没有可加入的行程，请先在行程页创建一个。');
-    }
-
+  @override
+  Future<void> add({
+    required Place place,
+    required TripSchedulingContext trip,
+    required ScheduleSelection selection,
+  }) async {
     // position 必须避开同一天已有项：(trip_day_id, position) 对非取消项唯一。
-    final position = await _repository.countItemsOnDay(target.tripDayId);
+    final position = await _repository.countItemsOnDay(selection.day.id);
 
-    final start = resolveStartInstant(
-      localDate: target.localDate,
-      timezone: target.timezone,
-      hour: _defaultStartHour,
+    final start = resolveInstant(
+      localDate: selection.day.localDate,
+      timezone: trip.timezone,
+      hour: selection.hour,
+      minute: selection.minute,
     );
 
     await _repository.addTripItem(
-      tripId: target.tripId,
-      expectedRevision: target.revision,
-      tripDayId: target.tripDayId,
+      tripId: trip.tripId,
+      expectedRevision: trip.revision,
+      tripDayId: selection.day.id,
       title: place.name,
       plannedStartAt: start,
-      plannedEndAt: start.add(_defaultDuration),
-      timeSlot: TripStopType.lunch,
+      plannedEndAt: start.add(selection.duration),
+      timeSlot: selection.timeSlot,
       position: position,
       placeId: place.id,
       placeSnapshot: buildSnapshot(place),
@@ -62,7 +75,7 @@ PlaceSnapshot buildSnapshot(Place place) {
   );
 }
 
-/// 计算行程项的开始时刻。
+/// 把「行程时区下的墙上时间」换算为真正的时刻。
 ///
 /// 库端要求「按行程时区折算后的日期」必须等于所属 trip_day 的 local_date
 /// （itinerary_schema.sql:232）。若直接用设备本地时区构造 DateTime，用户在
@@ -71,10 +84,11 @@ PlaceSnapshot buildSnapshot(Place place) {
 /// 只支持固定偏移的时区。Dart 核心库不含 IANA 时区数据库，而本项目当前所有行程
 /// 的时区都是 `Asia/Shanghai`（`trips.timezone` 的默认值）。遇到未知时区时抛错
 /// 而非静默按 UTC 处理——后者会写出差一天的数据，且难以察觉。
-DateTime resolveStartInstant({
+DateTime resolveInstant({
   required DateTime localDate,
   required String timezone,
   required int hour,
+  int minute = 0,
 }) {
   final offset = _fixedOffsets[timezone];
   if (offset == null) {
@@ -86,6 +100,7 @@ DateTime resolveStartInstant({
     localDate.month,
     localDate.day,
     hour,
+    minute,
   ).subtract(offset);
 }
 

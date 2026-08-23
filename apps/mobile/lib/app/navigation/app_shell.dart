@@ -52,7 +52,7 @@ class _AppShellState extends State<AppShell> {
           children: [
             ExplorePage(
               placeRepository: widget.dependencies.placeRepository,
-              onAddPlaceToTrip: widget.dependencies.onAddPlaceToTrip,
+              scheduler: widget.dependencies.scheduler,
             ),
             TripPage(
               repository: widget.dependencies.tripRepository,

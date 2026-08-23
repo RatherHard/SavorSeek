@@ -11,6 +11,8 @@ import 'package:savorseek/features/places/place_detail_sheet.dart';
 import 'package:savorseek/features/places/place_models.dart';
 import 'package:savorseek/features/places/place_repository.dart';
 import 'package:savorseek/features/places/place_search_controller.dart';
+import 'package:savorseek/features/trip/add_place_to_trip.dart';
+import 'package:savorseek/features/trip/schedule_picker_sheet.dart';
 
 /// 探索页（P-MAP）。
 ///
@@ -21,13 +23,13 @@ import 'package:savorseek/features/places/place_search_controller.dart';
 /// 让「下达指令 → 地图上看到结果」这条路径可用。接入真实编排后，这里改为提交
 /// 结构化指令，检索由 Agent 的 `search_places` 工具发起。
 class ExplorePage extends StatefulWidget {
-  const ExplorePage({super.key, this.placeRepository, this.onAddPlaceToTrip});
+  const ExplorePage({super.key, this.placeRepository, this.scheduler});
 
   /// 地点检索仓库。为空时检索入口禁用（未注入后端依赖的场景）。
   final PlaceRepository? placeRepository;
 
-  /// 把地点加入行程。为空时详情面板的按钮禁用。
-  final Future<void> Function(Place place)? onAddPlaceToTrip;
+  /// 加入行程的能力。为空时详情面板的按钮禁用。
+  final PlaceScheduler? scheduler;
 
   @override
   State<ExplorePage> createState() => _ExplorePageState();
@@ -81,17 +83,40 @@ class _ExplorePageState extends State<ExplorePage> {
     await _search?.searchByKeywords(command, city: _defaultCity);
   }
 
+  /// 加入行程：先取排期上下文，再让用户选年月日时分，最后写入。
+  ///
+  /// 顺序不能颠倒——时间选择器需要行程已有的日期列表来限定可选范围，而库端要求
+  /// 项归属的 trip_day 必须已存在。
   Future<void> _addSelectedToTrip() async {
     final place = _search?.selected;
-    final handler = widget.onAddPlaceToTrip;
-    if (place == null || handler == null || _isAddingToTrip) return;
+    final scheduler = widget.scheduler;
+    if (place == null || scheduler == null || _isAddingToTrip) return;
 
     setState(() => _isAddingToTrip = true);
     try {
-      await handler(place);
+      final trip = await scheduler.loadContext();
+      if (!mounted) return;
+      if (trip == null) {
+        _showMessage('还没有可加入的行程，请先在行程页创建一个。');
+        return;
+      }
+
+      final selection = await showSchedulePickerSheet(
+        context,
+        placeName: place.name,
+        trip: trip,
+      );
+      // 用户取消时静默返回：他没有失败，不该看到提示。
+      if (selection == null || !mounted) return;
+
+      await scheduler.add(place: place, trip: trip, selection: selection);
       if (!mounted) return;
       _search?.clearSelection();
-      _showMessage('已加入行程：${place.name}');
+      _showMessage(
+        '已加入行程：${place.name}（'
+        '${formatLocalDate(selection.day.localDate)} '
+        '${formatWallClock(selection.hour, selection.minute)}）',
+      );
     } on Exception catch (error) {
       if (!mounted) return;
       _showMessage(error.toString());
@@ -160,7 +185,7 @@ class _ExplorePageState extends State<ExplorePage> {
           child: PlaceDetailSheet(
             place: selected,
             onClose: search.clearSelection,
-            onAddToTrip: widget.onAddPlaceToTrip == null
+            onAddToTrip: widget.scheduler == null
                 ? null
                 : _addSelectedToTrip,
             isAdding: _isAddingToTrip,
