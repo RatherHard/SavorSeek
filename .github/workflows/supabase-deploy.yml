@@ -1,0 +1,192 @@
+name: Supabase Deploy (self-hosted)
+
+# 把仓库的 supabase/ 同步到自建 Supabase 实例。
+#
+# 部署模型：runner 把当前 commit 的 supabase/ 打包推给服务器，服务器本地执行迁移。
+#   1. runner 校验迁移文件名，打包 supabase/ 与校验脚本
+#   2. 经 SSH 传输到服务器，服务器解包同步到 APP_DIR
+#   3. 服务器上 supabase db push --db-url 直连本机 Postgres 应用迁移
+#   4. 重启 edge-runtime 容器加载新的 Edge Functions
+#
+# 为什么不在服务器上 git pull：那样服务器还需要一把能拉 GitHub 的部署密钥，
+# 且要维护干净的工作区。直接推 runner 上的 checkout，内容必然等于触发本次
+# workflow 的 commit，服务器无需任何 GitHub 凭据。
+#
+# 自建实例无法使用 supabase link 与 supabase functions deploy，二者只能连
+# api.supabase.com，所以迁移走 --db-url、函数走容器重启。
+#
+# 需要在 Settings > Secrets and variables > Actions 配置：
+#   SSH_HOST         服务器地址
+#   SSH_USER         SSH 用户名
+#   SSH_PRIVATE_KEY  SSH 私钥（完整 PEM，含 BEGIN/END 行，且不带 passphrase）
+#   SSH_KNOWN_HOSTS  可选。服务器公钥的 known_hosts 行，形如
+#                    `<host> ssh-ed25519 AAAA...`。配置后 runner 只信任这把
+#                    公钥；留空则退化为每次运行现场 ssh-keyscan——那等于无条件
+#                    信任首次应答方，无法防中间人，仅适合内网或临时验证。
+#
+# 其余配置留在服务器 /etc/savorseek/deploy.env，见 deploy-self-hosted.sh 注释：
+#   SUPABASE_DB_URL  本机 Postgres 连接串
+#   EDGE_CONTAINER   edge-runtime 容器名
+# 数据库口令因此不经过 GitHub，也不出现在服务器的进程列表里。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/**'
+      - '.github/workflows/supabase-deploy.yml'
+      - '.github/scripts/**'
+  workflow_dispatch:
+
+# 禁止并发部署：两个 db push 同时跑会争抢 schema_migrations，可能留下不一致的历史。
+# 不取消进行中的任务，让已开始的迁移跑完。
+concurrency:
+  group: supabase-deploy-self-hosted
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # 服务器上存放 supabase/ 的目录。edge-runtime 容器必须挂载
+  # $APP_DIR/supabase/functions，否则重启不会加载新代码。
+  APP_DIR: /opt/savorseek
+  # SSH 端口。非 22 时改这里，不必动 Secrets。
+  SSH_PORT: '22'
+  # 所有 ssh 调用共用的参数。BatchMode 禁掉一切交互提示（否则密钥不被接受时
+  # 会挂在密码提示上直到 job 超时）；StrictHostKeyChecking=yes 让公钥不匹配
+  # 直接失败而非询问；ServerAliveInterval 避免长迁移期间连接被中间设备掐断。
+  SSH_OPTS: >-
+    -i ~/.ssh/deploy_key
+    -o BatchMode=yes
+    -o StrictHostKeyChecking=yes
+    -o UserKnownHostsFile=~/.ssh/known_hosts
+    -o ConnectTimeout=20
+    -o ServerAliveInterval=30
+    -o ServerAliveCountMax=10
+
+jobs:
+  deploy:
+    name: 同步到自建实例
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 确认 Secrets 已配置
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in SSH_HOST SSH_USER SSH_PRIVATE_KEY; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::缺少 Secret: $name"
+              missing=1
+            fi
+          done
+          [ "$missing" = "0" ]
+
+      # 在 runner 上先做静态校验，避免把已知有问题的迁移推到服务器。
+      # 版本号冲突会让迁移被静默跳过，而 db push 仍然返回成功。
+      - name: 校验迁移文件名
+        run: node .github/scripts/check-migration-names.mjs
+
+      - name: 配置 SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # 密钥带 passphrase 时 ssh 会挂在交互式提示上直到超时，先显式拦掉。
+          ssh-keygen -y -P '' -f ~/.ssh/deploy_key >/dev/null 2>&1 \
+            || { echo '::error::SSH_PRIVATE_KEY 无法解析或带有 passphrase'; exit 1; }
+          if [ -n "${SSH_KNOWN_HOSTS:-}" ]; then
+            # 固定主机公钥：MITM 换了密钥就直接连接失败，而不是静默接受。
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+            echo '已固定主机公钥（SSH_KNOWN_HOSTS）。'
+          else
+            echo '::warning::未配置 SSH_KNOWN_HOSTS，改用现场 ssh-keyscan，无法防御中间人。'
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+            [ -s ~/.ssh/known_hosts ] || { echo "::error::ssh-keyscan 未取到 $SSH_HOST:$SSH_PORT 的公钥"; exit 1; }
+          fi
+          chmod 600 ~/.ssh/known_hosts
+          echo "PAYLOAD=savorseek-${{ github.run_id }}-${{ github.run_attempt }}.tgz" >> "$GITHUB_ENV"
+
+      # 先确认服务器依赖齐全再传包。缺 supabase CLI 时提前失败，
+      # 免得传完几 MB 才在部署脚本里报错。
+      - name: 预检服务器依赖
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+          ssh $SSH_OPTS -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -se' <<'PREFLIGHT'
+          set -euo pipefail
+          missing=0
+          for bin in supabase docker; do
+            if command -v "$bin" >/dev/null; then
+              echo "ok: $bin ($("$bin" --version 2>&1 | head -1))"
+            else
+              echo "缺失: $bin" >&2
+              missing=1
+            fi
+          done
+          command -v node >/dev/null && echo "ok: node ($(node --version))" \
+            || echo '提示: 未安装 node，迁移核对将退化为文本判定'
+          command -v rsync >/dev/null && echo "ok: rsync" \
+            || echo '提示: 未安装 rsync，同步将退化为 rm -rf + cp -a'
+          [ -r /etc/savorseek/deploy.env ] && echo 'ok: /etc/savorseek/deploy.env 可读' \
+            || { echo '缺失: /etc/savorseek/deploy.env 不存在或不可读' >&2; missing=1; }
+          exit "$missing"
+          PREFLIGHT
+
+      # 只传 supabase/ 与校验脚本，服务器不需要 Flutter 端与文档。
+      # 用 stdin 管道而非 scp，省掉一次 SSH 往返与临时文件清理。
+      - name: 传输部署包
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+          tar czf - supabase .github/scripts/check-migration-names.mjs \
+            | ssh $SSH_OPTS -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+                "umask 077 && mkdir -p ~/.cache/savorseek && cat > ~/.cache/savorseek/$PAYLOAD"
+
+      # 部署脚本经 stdin 传入并在服务器上执行，不在服务器留存副本。
+      - name: SSH 部署
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+          ssh $SSH_OPTS -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            APP_DIR="$APP_DIR" \
+            PAYLOAD="$PAYLOAD" \
+            TARGET_SHA="${{ github.sha }}" \
+            'bash -s' < .github/scripts/deploy-self-hosted.sh
+
+      # 部署失败时清掉服务器上的部署包。部署脚本自己的 EXIT trap 只在脚本
+      # 跑起来后才生效；若在传输后、执行前就失败，残包会留在 ~/.cache。
+      - name: 清理残留部署包
+        if: always()
+        continue-on-error: true
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -uo pipefail
+          [ -n "${PAYLOAD:-}" ] || exit 0
+          ssh $SSH_OPTS -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "rm -f ~/.cache/savorseek/$PAYLOAD" || true

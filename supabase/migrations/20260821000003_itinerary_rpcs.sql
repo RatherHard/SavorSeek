@@ -37,7 +37,7 @@ create or replace function public.create_trip(
   p_start_date date default null, p_end_date date default null, p_party_size smallint default 1,
   p_currency_code char(3) default 'CNY', p_budget_limit_minor bigint default null,
   p_budget_scope text default null, p_default_travel_mode text default 'walking')
-returns jsonb language plpgsql security definer set search_path = public, pg_temp
+returns jsonb language plpgsql security definer set search_path = public, extensions, pg_temp
 as $$
 declare actor uuid := (select auth.uid()); request_hash bytea; prior jsonb; created public.trips%rowtype; result jsonb;
 begin
@@ -55,7 +55,7 @@ create or replace function public.add_trip_day(
   p_trip_id uuid, p_expected_revision bigint, p_idempotency_key uuid, p_local_date date,
   p_available_start_time time default null, p_available_end_time time default null,
   p_budget_limit_minor bigint default null, p_notes varchar(1000) default null)
-returns jsonb language plpgsql security definer set search_path = public, pg_temp
+returns jsonb language plpgsql security definer set search_path = public, extensions, pg_temp
 as $$
 declare actor uuid := (select auth.uid()); request_hash bytea; prior jsonb; trip_row public.trips%rowtype; created public.trip_days%rowtype; result jsonb;
 begin
@@ -78,7 +78,7 @@ create or replace function public.add_trip_item(
   p_planned_end_at timestamptz, p_time_slot text default 'flexible', p_position integer default 0,
   p_estimated_cost_min_minor bigint default null, p_estimated_cost_max_minor bigint default null,
   p_notes varchar(1000) default null, p_place_snapshot jsonb default null)
-returns jsonb language plpgsql security definer set search_path = public, pg_temp
+returns jsonb language plpgsql security definer set search_path = public, extensions, pg_temp
 as $$
 declare actor uuid := (select auth.uid()); request_hash bytea; prior jsonb; trip_row public.trips%rowtype; created public.trip_items%rowtype; result jsonb;
 begin
