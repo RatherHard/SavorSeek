@@ -8,12 +8,24 @@ import 'package:savorseek/app/config/amap_config.dart';
 
 /// 高德地图显示区域。
 ///
-/// 只负责「把瓦片显示出来并支持手势」，不承载业务逻辑。地点标记、聚合与筛选
-/// 由后续的地图数据层接入。
+/// 只负责「把瓦片显示出来、渲染传入的覆盖物并支持手势」，不承载业务逻辑：
+/// 标记由上层构造后传入，本组件不知道地点从哪来、点击后该做什么。聚合与筛选
+/// 同样留给上层。
 class AmapSurface extends StatefulWidget {
-  const AmapSurface({super.key, this.onMapCreated});
+  const AmapSurface({
+    super.key,
+    this.onMapCreated,
+    this.markers = const <Marker>{},
+    this.onMapTap,
+  });
 
   final void Function(AMapController controller)? onMapCreated;
+
+  /// 要渲染的标记集合。插件按 marker id 做增量更新，重复传入同一集合不会闪烁。
+  final Set<Marker> markers;
+
+  /// 点击地图空白处。用于收起地点详情面板。
+  final void Function(LatLng position)? onMapTap;
 
   /// 默认视野中心（大连），在定位能力接入前作为回退中心点。
   static const CameraPosition initialCamera = CameraPosition(
@@ -62,6 +74,8 @@ class _AmapSurfaceState extends State<AmapSurface> {
     return AMapWidget(
       initialCameraPosition: AmapSurface.initialCamera,
       onMapCreated: widget.onMapCreated,
+      markers: widget.markers,
+      onTap: widget.onMapTap,
       // 单指拖拽与双指缩放为本阶段的硬性要求。
       scrollGesturesEnabled: true,
       zoomGesturesEnabled: true,

@@ -50,7 +50,10 @@ class _AppShellState extends State<AppShell> {
           index: AppDestination.values.indexOf(_current),
           sizing: StackFit.expand,
           children: [
-            const ExplorePage(),
+            ExplorePage(
+              placeRepository: widget.dependencies.placeRepository,
+              onAddPlaceToTrip: widget.dependencies.onAddPlaceToTrip,
+            ),
             TripPage(
               repository: widget.dependencies.tripRepository,
               auth: widget.dependencies.auth,

@@ -188,6 +188,75 @@ class SupabaseTripRepository implements TripRepository {
     );
   }
 
+  /// 把一个地点加入「最近更新的行程」时所需的定位信息。
+  ///
+  /// 为什么不复用 [loadPlan]：`TripPlan` 是展示模型，不含 `revision` 与
+  /// `trip_days.id`，而 `add_trip_item` 两者都必需。这里单独取最小字段集，避免
+  /// 为了一次写入把并发控制字段渗进 UI 模型。
+  ///
+  /// 返回 null 表示用户还没有行程或行程还没有任何一天，调用方应引导其先创建。
+  Future<TripTarget?> findLatestTripTarget() async {
+    _requireSession();
+    try {
+      final rows = await _client
+          .from('trips')
+          .select(
+            'id, revision, timezone, start_date, trip_days(id, local_date)',
+          )
+          .order('updated_at', ascending: false)
+          .limit(1);
+      if (rows.isEmpty) return null;
+      final row = rows.first;
+      final days =
+          [...?(row['trip_days'] as List?)]
+              .whereType<Map<String, dynamic>>()
+              .toList()
+            ..sort(
+              (a, b) => (a['local_date'] as String).compareTo(
+                b['local_date'] as String,
+              ),
+            );
+      if (days.isEmpty) return null;
+      final first = days.first;
+      return TripTarget(
+        tripId: row['id'] as String,
+        revision: (row['revision'] as num).toInt(),
+        timezone: row['timezone'] as String,
+        tripDayId: first['id'] as String,
+        localDate: DateTime.parse(first['local_date'] as String),
+      );
+    } on PostgrestException catch (error) {
+      throw _translate(error);
+    } on SocketException catch (_) {
+      throw const TripRepositoryException(
+        '无法连接行程服务，请检查网络后重试。',
+        kind: TripRepositoryErrorKind.network,
+      );
+    }
+  }
+
+  /// 统计某一天已有的行程项数，用于推导新项的 position。
+  ///
+  /// `trip_items` 对 (trip_day_id, position) 有唯一约束（仅非取消项，见
+  /// itinerary_schema.sql:111），position 固定传 0 会在第二次加入时冲突。
+  Future<int> countItemsOnDay(String tripDayId) async {
+    _requireSession();
+    try {
+      final rows = await _client
+          .from('trip_items')
+          .select('id, status')
+          .eq('trip_day_id', tripDayId);
+      return rows.where((row) => row['status'] != 'cancelled').length;
+    } on PostgrestException catch (error) {
+      throw _translate(error);
+    } on SocketException catch (_) {
+      throw const TripRepositoryException(
+        '无法连接行程服务，请检查网络后重试。',
+        kind: TripRepositoryErrorKind.network,
+      );
+    }
+  }
+
   Future<Map<String, dynamic>> _rpc(
     String name,
     Map<String, dynamic> params,
@@ -334,6 +403,30 @@ enum PlaceCoordinateSystem {
   const PlaceCoordinateSystem(this.wireName);
 
   final String wireName;
+}
+
+/// 写入行程项所需的目标定位。
+@immutable
+class TripTarget {
+  const TripTarget({
+    required this.tripId,
+    required this.revision,
+    required this.timezone,
+    required this.tripDayId,
+    required this.localDate,
+  });
+
+  final String tripId;
+
+  /// 乐观并发控制的期望修订号，作为 `add_trip_item` 的 `p_expected_revision`。
+  final int revision;
+
+  /// 行程时区。库端 trigger 会校验「项的开始时刻按此时区折算后的日期」必须等于
+  /// 所属 trip_day 的 local_date（itinerary_schema.sql:232），因此排时间时不能
+  /// 用设备本地时区。
+  final String timezone;
+  final String tripDayId;
+  final DateTime localDate;
 }
 
 @immutable
