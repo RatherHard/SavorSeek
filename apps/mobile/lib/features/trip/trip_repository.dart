@@ -1,10 +1,30 @@
+import 'dart:io' show SocketException;
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:savorseek/app/config/supabase_config.dart';
+import 'package:savorseek/app/util/uuid.dart';
+import 'package:savorseek/features/auth/auth_service.dart';
 
+import 'trip_mapper.dart';
 import 'trip_models.dart';
+
+/// 单次读取所需的全部列。
+///
+/// 一次嵌套查询而非逐层拉取：分三次请求即是 N+1，且中途 revision 变化会读到
+/// 不一致的快照。
+const String _planSelect = '''
+id, title, timezone, start_date, end_date, revision, updated_at,
+trip_days(
+  id, local_date, available_start_time, available_end_time, notes,
+  trip_items(
+    id, trip_day_id, item_type, place_id, title, planned_start_at,
+    planned_end_at, time_slot, position, notes, status,
+    is_place_locked, is_time_locked, is_order_locked
+  )
+)''';
 
 abstract interface class TripRepository {
   Future<TripPlan?> loadPlan();
@@ -19,20 +39,461 @@ class InMemoryTripRepository implements TripRepository {
   Future<TripPlan?> loadPlan() async => plan;
 }
 
-/// Read-only fallback until Auth is available in the application shell.
-class SupabaseTripRepository implements TripRepository {
-  const SupabaseTripRepository();
+/// 后端不可用时的占位仓库。
+///
+/// 存在的意义是让「未注入 Supabase 参数」与「查询失败」走同一条 UI 错误分支，
+/// 而不是在 Widget 树里散落 null 判断。
+class UnavailableTripRepository implements TripRepository {
+  const UnavailableTripRepository([this.message]);
+
+  final String? message;
 
   @override
   Future<TripPlan?> loadPlan() async {
+    throw TripRepositoryException(message ?? SupabaseConfig.missingMessage);
+  }
+}
+
+/// 基于自建 Supabase 的行程仓库。
+///
+/// 读写路径不对称，这是本类的核心约束：`authenticated` 角色对三张表只有
+/// `select`，insert/update/delete 已全部 revoke（见 itinerary_schema.sql:310），
+/// 因此写入必须走 `security definer` RPC，直接 `.insert()` 必然被拒。
+class SupabaseTripRepository implements TripRepository {
+  SupabaseTripRepository({required this.auth, SupabaseClient? client})
+    : _client = client ?? Supabase.instance.client;
+
+  final AuthService auth;
+  final SupabaseClient _client;
+
+  @override
+  Future<TripPlan?> loadPlan() async {
+    _requireSession();
+    try {
+      // RLS 限定 user_id = auth.uid()，无需在客户端重复过滤。
+      // 取最近更新的一条：当前 UI 只展示单个行程。
+      final rows = await _client
+          .from('trips')
+          .select(_planSelect)
+          .order('updated_at', ascending: false)
+          .limit(1);
+      if (rows.isEmpty) return null;
+      final row = rows.first;
+      final sorted = _sortNested(row);
+      return TripMapper.planFromRow(sorted);
+    } on PostgrestException catch (error) {
+      throw _translate(error);
+    } on SocketException catch (_) {
+      throw const TripRepositoryException(
+        '无法连接行程服务，请检查网络后重试。',
+        kind: TripRepositoryErrorKind.network,
+      );
+    }
+  }
+
+  /// 创建行程，返回新行程的 id 与 revision。
+  Future<TripWriteResult> createTrip({
+    required String title,
+    required DateTime startDate,
+    required DateTime endDate,
+    String timezone = 'Asia/Shanghai',
+    int partySize = 1,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('create_trip', {
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_title': title,
+      'p_timezone': timezone,
+      'p_start_date': _formatDate(startDate),
+      'p_end_date': _formatDate(endDate),
+      'p_party_size': partySize,
+    });
+    // create_trip 直接返回 trips 行，不带 revision 包装。
+    return TripWriteResult(
+      id: payload['id'] as String,
+      revision: (payload['revision'] as num).toInt(),
+    );
+  }
+
+  /// 创建行程并按日期区间补齐每一天。
+  ///
+  /// 两次 RPC 之间没有事务包裹，因此幂等键必须由调用方复用：网络中断后重试时，
+  /// 同一把键会命中 `trip_idempotency_keys` 返回原结果，而不是创建第二个行程。
+  /// 键在首次调用时生成并缓存于 [keys]，重试请传入同一个实例。
+  ///
+  /// 逐天调用 `add_trip_day` 且每次都用上一次返回的 revision：该 RPC 会把
+  /// `trips.revision` 自增，沿用旧值会在第二天触发 P0002 冲突。
+  Future<TripWriteResult> createTripWithDays({
+    required String title,
+    required DateTime startDate,
+    required DateTime endDate,
+    required CreateTripKeys keys,
+    int partySize = 1,
+    int? budgetLimitMinor,
+    String timezone = 'Asia/Shanghai',
+  }) async {
+    final created = await createTrip(
+      title: title,
+      startDate: startDate,
+      endDate: endDate,
+      timezone: timezone,
+      partySize: partySize,
+      idempotencyKey: keys.trip,
+    );
+
+    var revision = created.revision;
+    final dayCount = endDate.difference(startDate).inDays + 1;
+    for (var offset = 0; offset < dayCount; offset++) {
+      final result = await addTripDay(
+        tripId: created.id,
+        expectedRevision: revision,
+        localDate: startDate.add(Duration(days: offset)),
+        idempotencyKey: keys.dayKeyAt(offset),
+      );
+      revision = result.revision;
+    }
+
+    return TripWriteResult(id: created.id, revision: revision);
+  }
+
+  /// 添加一天。[expectedRevision] 取自 `trips.revision`，不匹配时抛
+  /// [TripRepositoryErrorKind.conflict]，调用方应重新读取后重试。
+  Future<TripWriteResult> addTripDay({
+    required String tripId,
+    required int expectedRevision,
+    required DateTime localDate,
+    String? notes,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('add_trip_day', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_local_date': _formatDate(localDate),
+      'p_notes': notes,
+    });
+    return TripWriteResult(
+      id: (payload['trip_day'] as Map<String, dynamic>)['id'] as String,
+      revision: (payload['revision'] as num).toInt(),
+    );
+  }
+
+  /// 添加一个行程项。时间以 UTC 序列化，服务端列为 timestamptz。
+  ///
+  /// 两类项的必填项互斥，由库端 trigger 强制（itinerary_schema.sql:236-262）：
+  /// `place_visit` 必须同时带 [placeId] 与 [placeSnapshot]，`break` 两者都不能带。
+  /// 违反时服务端返回 23514，因此在发请求前先本地断言，省一次往返。
+  Future<TripWriteResult> addTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripDayId,
+    required String title,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    TripStopType timeSlot = TripStopType.flexible,
+    TripItemType itemType = TripItemType.placeVisit,
+    int position = 0,
+    String? placeId,
+    PlaceSnapshot? placeSnapshot,
+    String? notes,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    if (itemType == TripItemType.placeVisit) {
+      if (placeId == null || placeSnapshot == null) {
+        throw const TripRepositoryException('地点项必须同时提供 placeId 与地点快照。');
+      }
+    } else if (placeId != null || placeSnapshot != null) {
+      throw const TripRepositoryException('休息项不能关联地点。');
+    }
+    final payload = await _rpc('add_trip_item', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_trip_day_id': tripDayId,
+      'p_item_type': itemType.wireName,
+      'p_place_id': placeId,
+      'p_title': title,
+      'p_planned_start_at': plannedStartAt.toUtc().toIso8601String(),
+      'p_planned_end_at': plannedEndAt.toUtc().toIso8601String(),
+      'p_time_slot': timeSlot.wireName,
+      'p_position': position,
+      'p_notes': notes,
+      'p_place_snapshot': placeSnapshot?.toJson(),
+    });
+    return TripWriteResult(
+      id: (payload['trip_item'] as Map<String, dynamic>)['id'] as String,
+      revision: (payload['revision'] as num).toInt(),
+    );
+  }
+
+  /// 把一个地点加入「最近更新的行程」时所需的定位信息。
+  ///
+  /// 为什么不复用 [loadPlan]：`TripPlan` 是展示模型，不含 `revision` 与
+  /// `trip_days.id`，而 `add_trip_item` 两者都必需。这里单独取最小字段集，避免
+  /// 为了一次写入把并发控制字段渗进 UI 模型。
+  ///
+  /// 返回 null 表示用户还没有行程或行程还没有任何一天，调用方应引导其先创建。
+  Future<TripTarget?> findLatestTripTarget() async {
+    _requireSession();
+    try {
+      final rows = await _client
+          .from('trips')
+          .select(
+            'id, revision, timezone, start_date, trip_days(id, local_date)',
+          )
+          .order('updated_at', ascending: false)
+          .limit(1);
+      if (rows.isEmpty) return null;
+      final row = rows.first;
+      final days =
+          [...?(row['trip_days'] as List?)]
+              .whereType<Map<String, dynamic>>()
+              .toList()
+            ..sort(
+              (a, b) => (a['local_date'] as String).compareTo(
+                b['local_date'] as String,
+              ),
+            );
+      if (days.isEmpty) return null;
+      final first = days.first;
+      return TripTarget(
+        tripId: row['id'] as String,
+        revision: (row['revision'] as num).toInt(),
+        timezone: row['timezone'] as String,
+        tripDayId: first['id'] as String,
+        localDate: DateTime.parse(first['local_date'] as String),
+      );
+    } on PostgrestException catch (error) {
+      throw _translate(error);
+    } on SocketException catch (_) {
+      throw const TripRepositoryException(
+        '无法连接行程服务，请检查网络后重试。',
+        kind: TripRepositoryErrorKind.network,
+      );
+    }
+  }
+
+  /// 统计某一天已有的行程项数，用于推导新项的 position。
+  ///
+  /// `trip_items` 对 (trip_day_id, position) 有唯一约束（仅非取消项，见
+  /// itinerary_schema.sql:111），position 固定传 0 会在第二次加入时冲突。
+  Future<int> countItemsOnDay(String tripDayId) async {
+    _requireSession();
+    try {
+      final rows = await _client
+          .from('trip_items')
+          .select('id, status')
+          .eq('trip_day_id', tripDayId);
+      return rows.where((row) => row['status'] != 'cancelled').length;
+    } on PostgrestException catch (error) {
+      throw _translate(error);
+    } on SocketException catch (_) {
+      throw const TripRepositoryException(
+        '无法连接行程服务，请检查网络后重试。',
+        kind: TripRepositoryErrorKind.network,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> _rpc(
+    String name,
+    Map<String, dynamic> params,
+  ) async {
+    try {
+      final result = await _client.rpc<dynamic>(name, params: params);
+      if (result is Map<String, dynamic>) return result;
+      throw TripRepositoryException('$name 返回了非预期的结果。');
+    } on PostgrestException catch (error) {
+      throw _translate(error);
+    } on SocketException catch (_) {
+      throw const TripRepositoryException(
+        '无法连接行程服务，请检查网络后重试。',
+        kind: TripRepositoryErrorKind.network,
+      );
+    }
+  }
+
+  void _requireSession() {
     if (!SupabaseConfig.isConfigured) {
       throw TripRepositoryException(SupabaseConfig.missingMessage);
     }
-    throw const TripRepositoryException(
-      '当前应用尚未建立认证会话，无法读取私有行程。',
-      kind: TripRepositoryErrorKind.unauthenticated,
+    if (!auth.isSignedIn) {
+      throw const TripRepositoryException(
+        '登录后即可查看属于你的行程。',
+        kind: TripRepositoryErrorKind.unauthenticated,
+      );
+    }
+  }
+
+  /// 嵌套关系无法用顶层 `.order()` 排序，PostgREST 的 referencedTable 排序在
+  /// 深层嵌套下不稳定，故在客户端按 local_date / position 排一次。
+  Map<String, dynamic> _sortNested(Map<String, dynamic> row) {
+    final days = [...?(row['trip_days'] as List?)]
+        .whereType<Map<String, dynamic>>()
+        .map((day) {
+          final items = [...?(day['trip_items'] as List?)]
+              .whereType<Map<String, dynamic>>()
+              // 已取消的项不参与展示，位置唯一约束也仅覆盖非取消项。
+              .where((item) => item['status'] != 'cancelled')
+              .toList()
+            ..sort(_byPosition);
+          return {...day, 'trip_items': items};
+        })
+        .toList()
+      ..sort(
+        (a, b) =>
+            (a['local_date'] as String).compareTo(b['local_date'] as String),
+      );
+    return {...row, 'trip_days': days};
+  }
+
+  static int _byPosition(Map<String, dynamic> a, Map<String, dynamic> b) {
+    final byPosition = ((a['position'] as num?) ?? 0).compareTo(
+      (b['position'] as num?) ?? 0,
+    );
+    if (byPosition != 0) return byPosition;
+    return (a['planned_start_at'] as String).compareTo(
+      b['planned_start_at'] as String,
     );
   }
+
+  static String _formatDate(DateTime date) {
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '${date.year}-$month-$day';
+  }
+}
+
+/// 把 PostgREST / RPC 错误码映射到 UI 已有的分支。
+///
+/// 错误码与 itinerary_rpcs.sql 中 `raise exception using errcode` 一致：
+/// 28000 未认证、42501 无权限或不存在、40001 revision 冲突。
+TripRepositoryException translatePostgrestError({
+  required String? code,
+  required String message,
+}) {
+  return switch (code) {
+    '28000' || 'PGRST301' => const TripRepositoryException(
+      '登录状态已失效，请重新登录。',
+      kind: TripRepositoryErrorKind.unauthenticated,
+    ),
+    // P0002 是 RPC 显式抛出的 revision 冲突。40001 保留：真正的串行化失败也
+    // 应让用户重新加载后重试，处置方式与前者一致。
+    'P0002' || '40001' => const TripRepositoryException(
+      '行程已被其他操作更新，请重新加载后再试。',
+      kind: TripRepositoryErrorKind.conflict,
+    ),
+    '42501' => const TripRepositoryException(
+      '没有权限访问该行程。',
+      kind: TripRepositoryErrorKind.unauthenticated,
+    ),
+    _ => TripRepositoryException(message),
+  };
+}
+
+TripRepositoryException _translate(PostgrestException error) =>
+    translatePostgrestError(code: error.code, message: error.message);
+
+/// 写入行程项时随附的地点快照。
+///
+/// 库端 trigger 会逐项校验（itinerary_schema.sql:243-259）：`schema_version`
+/// 必须为 1，`name` 非空，经纬度必须同时给出或同时省略，给出时须落在合法范围
+/// 且 `coordinate_system` 为 gcj02 或 wgs84。快照的意义是把当时的地点信息固化
+/// 下来，即使源地点后续变更，已排入行程的内容也不会漂移。
+@immutable
+class PlaceSnapshot {
+  const PlaceSnapshot({
+    required this.name,
+    this.latitude,
+    this.longitude,
+    this.coordinateSystem = PlaceCoordinateSystem.gcj02,
+  }) : assert(
+         (latitude == null) == (longitude == null),
+         '经纬度必须同时提供或同时省略',
+       );
+
+  static const int schemaVersion = 1;
+
+  final String name;
+  final double? latitude;
+  final double? longitude;
+
+  /// 坐标系。高德返回 gcj02，故取其为默认值。
+  final PlaceCoordinateSystem coordinateSystem;
+
+  Map<String, dynamic> toJson() {
+    return {
+      'schema_version': schemaVersion,
+      'name': name,
+      if (latitude != null) ...{
+        'latitude': latitude,
+        'longitude': longitude,
+        'coordinate_system': coordinateSystem.wireName,
+      },
+    };
+  }
+}
+
+enum PlaceCoordinateSystem {
+  gcj02('gcj02'),
+  wgs84('wgs84');
+
+  const PlaceCoordinateSystem(this.wireName);
+
+  final String wireName;
+}
+
+/// 创建行程一次操作所用的幂等键集合。
+///
+/// 存在的意义是让重试可安全进行：`create_trip` 与逐天的 `add_trip_day` 是多次
+/// 独立 RPC，任一步之后中断，重试都必须复用同一批键，否则会创建出重复行程或
+/// 重复日期。持有同一实例即可重试。
+class CreateTripKeys {
+  CreateTripKeys({String? tripKey}) : trip = tripKey ?? generateUuidV4();
+
+  final String trip;
+  final Map<int, String> _dayKeys = {};
+
+  /// 第 [offset] 天的幂等键，按需生成后固定不变。
+  String dayKeyAt(int offset) =>
+      _dayKeys.putIfAbsent(offset, generateUuidV4);
+}
+
+/// 写入行程项所需的目标定位。
+@immutable
+class TripTarget {
+  const TripTarget({
+    required this.tripId,
+    required this.revision,
+    required this.timezone,
+    required this.tripDayId,
+    required this.localDate,
+  });
+
+  final String tripId;
+
+  /// 乐观并发控制的期望修订号，作为 `add_trip_item` 的 `p_expected_revision`。
+  final int revision;
+
+  /// 行程时区。库端 trigger 会校验「项的开始时刻按此时区折算后的日期」必须等于
+  /// 所属 trip_day 的 local_date（itinerary_schema.sql:232），因此排时间时不能
+  /// 用设备本地时区。
+  final String timezone;
+  final String tripDayId;
+  final DateTime localDate;
+}
+
+@immutable
+class TripWriteResult {
+  const TripWriteResult({required this.id, required this.revision});
+
+  final String id;
+
+  /// 写入后行程的最新 revision，供后续写入作为 expectedRevision。
+  final int revision;
 }
 
 class TripRepositoryException implements Exception {
@@ -89,7 +550,7 @@ class DemoTripRepository implements TripRepository {
               subtitle: '下午茶 · 15:00–16:30',
               startAt: DateTime(2026, 8, 22, 15),
               endAt: DateTime(2026, 8, 22, 16, 30),
-              type: TripStopType.snack,
+              type: TripStopType.afternoonTea,
               note: '留出步行时间，按现场排队情况灵活调整。',
             ),
             TripStop(

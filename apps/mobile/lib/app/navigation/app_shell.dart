@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'package:savorseek/app/app_dependencies.dart';
 import 'package:savorseek/app/navigation/app_destination.dart';
 import 'package:savorseek/app/navigation/primary_nav_bar.dart';
 import 'package:savorseek/app/theme/design_tokens.dart';
@@ -13,10 +14,16 @@ import 'package:savorseek/features/trip/trip_page.dart';
 /// [IndexedStack] 而非条件构建，使离开的页面保持状态（地图视野、滚动位置
 /// 与执行中的 Agent 任务不因切页而丢失，对应用户流程的导航约束第 2 条）。
 class AppShell extends StatefulWidget {
-  const AppShell({super.key, this.initialDestination = AppDestination.explore});
+  const AppShell({
+    super.key,
+    this.initialDestination = AppDestination.explore,
+    required this.dependencies,
+  });
 
   /// 初始页面，默认为探索页（文档：登录成功后 P-MAP 为默认首页）。
   final AppDestination initialDestination;
+
+  final AppDependencies dependencies;
 
   @override
   State<AppShell> createState() => _AppShellState();
@@ -42,10 +49,16 @@ class _AppShellState extends State<AppShell> {
         child: IndexedStack(
           index: AppDestination.values.indexOf(_current),
           sizing: StackFit.expand,
-          children: const [
-            ExplorePage(),
-            TripPage(),
-            MinePage(),
+          children: [
+            ExplorePage(
+              placeRepository: widget.dependencies.placeRepository,
+              onAddPlaceToTrip: widget.dependencies.onAddPlaceToTrip,
+            ),
+            TripPage(
+              repository: widget.dependencies.tripRepository,
+              auth: widget.dependencies.auth,
+            ),
+            MinePage(auth: widget.dependencies.auth),
           ],
         ),
       ),

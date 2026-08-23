@@ -1,0 +1,47 @@
+{
+  // Supabase 连接参数（SUPABASE_URL / SUPABASE_ANON_KEY）由 Dart 侧
+  // String.fromEnvironment 在编译期读取，Android 与 iOS 都没有原生兜底机制，
+  // 漏加 --dart-define-from-file 的启动会在行程页显示「未注入 Supabase 连接
+  // 参数」。高德 Key 在 Android 上由 Gradle 注入 manifest 不受影响，iOS 仍需
+  // 经 Dart 注入，故两个文件一起传。
+  //
+  // 提交本文件正是为了让「忘记加参数」不再复发：.gitignore 已显式放行
+  // .vscode/launch.json，而 .idea/ 整体被忽略，无法承担同样职责。
+  // 使用 IntelliJ / Android Studio 时，需在 Run Configuration 的
+  // "Additional run args" 中手动填入下方 args 的内容。
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "savorseek (debug)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "args": [
+        "--dart-define-from-file=supabase.env",
+        "--dart-define-from-file=amap.env"
+      ]
+    },
+    {
+      "name": "savorseek (profile)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "flutterMode": "profile",
+      "args": [
+        "--dart-define-from-file=supabase.env",
+        "--dart-define-from-file=amap.env"
+      ]
+    },
+    {
+      "name": "savorseek (release)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "flutterMode": "release",
+      "args": [
+        "--dart-define-from-file=supabase.env",
+        "--dart-define-from-file=amap.env"
+      ]
+    }
+  ]
+}

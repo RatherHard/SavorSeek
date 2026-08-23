@@ -1,15 +1,23 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:savorseek/app/theme/design_tokens.dart';
+import 'package:savorseek/features/auth/auth_service.dart';
+import 'package:savorseek/features/auth/auth_sheet.dart';
 
+import 'create_trip_sheet.dart';
 import 'trip_controller.dart';
 import 'trip_models.dart';
 import 'trip_repository.dart';
 
 class TripPage extends StatefulWidget {
-  const TripPage({super.key, this.repository = const SupabaseTripRepository()});
+  const TripPage({super.key, required this.repository, this.auth});
 
   final TripRepository repository;
+
+  /// 认证服务。为空时不提供登录入口，仅展示错误原因。
+  final AuthService? auth;
 
   @override
   State<TripPage> createState() => _TripPageState();
@@ -17,16 +25,25 @@ class TripPage extends StatefulWidget {
 
 class _TripPageState extends State<TripPage> {
   late final TripController _controller = TripController(widget.repository);
+  StreamSubscription<String?>? _authSubscription;
+
+  /// 创建进行中，用于阻止重复提交。
+  bool _isCreating = false;
 
   @override
   void initState() {
     super.initState();
     _controller.addListener(_onStateChanged);
+    // 登录/登出后行程可见性会变，重新拉取而不是让用户手动刷新。
+    _authSubscription = widget.auth?.userIdChanges.listen((_) {
+      _controller.load();
+    });
     _controller.load();
   }
 
   @override
   void dispose() {
+    _authSubscription?.cancel();
     _controller
       ..removeListener(_onStateChanged)
       ..dispose();
@@ -34,6 +51,58 @@ class _TripPageState extends State<TripPage> {
   }
 
   void _onStateChanged() => setState(() {});
+
+  Future<void> _signIn() async {
+    final auth = widget.auth;
+    if (auth == null) return;
+    final didSignIn = await showAuthSheet(context, auth: auth);
+    // 会话流已订阅，登录成功会自动触发重载；此处仅兜住未订阅到的情况。
+    if (didSignIn && mounted) await _controller.load();
+  }
+
+  /// 创建行程。
+  ///
+  /// 写入只对 [SupabaseTripRepository] 可用：其余实现（未配置、演示、内存）没有
+  /// 写入能力，此时不提供入口而非让按钮点了报错。
+  Future<void> _createTrip() async {
+    final repository = widget.repository;
+    if (repository is! SupabaseTripRepository || _isCreating) return;
+
+    final draft = await showCreateTripSheet(context);
+    if (draft == null || !mounted) return;
+
+    setState(() => _isCreating = true);
+    // 幂等键在本次操作内固定：冲突重试时复用，避免创建出第二个行程。
+    final keys = CreateTripKeys();
+    try {
+      await repository.createTripWithDays(
+        title: draft.title,
+        startDate: draft.startDate,
+        endDate: draft.endDate,
+        partySize: draft.partySize,
+        budgetLimitMinor: draft.budgetLimitMinor,
+        keys: keys,
+      );
+      if (!mounted) return;
+      await _controller.load();
+      if (mounted) _showMessage('已创建行程：${draft.title}');
+    } on TripRepositoryException catch (error) {
+      if (!mounted) return;
+      _showMessage(error.message);
+      // 冲突意味着服务端状态已变，重新读一次让 UI 与之对齐。
+      if (error.kind == TripRepositoryErrorKind.conflict) {
+        await _controller.load();
+      }
+    } finally {
+      if (mounted) setState(() => _isCreating = false);
+    }
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.maybeOf(
+      context,
+    )?.showSnackBar(SnackBar(content: Text(message)));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -43,8 +112,21 @@ class _TripPageState extends State<TripPage> {
         TripLoading() => const _TripLoading(key: ValueKey('loading')),
         TripEmpty() => _TripEmpty(
           key: const ValueKey('empty'),
-          onCreateTrip: () {},
+          // 无写入能力的仓库下置空，由 _TripEmpty 把按钮禁用。
+          onCreateTrip: widget.repository is SupabaseTripRepository
+              ? _createTrip
+              : null,
+          isCreating: _isCreating,
         ),
+        TripError(
+          kind: TripRepositoryErrorKind.unauthenticated,
+          :final message,
+        ) =>
+          _TripSignInPrompt(
+            key: const ValueKey('signIn'),
+            message: message,
+            onSignIn: widget.auth == null ? null : _signIn,
+          ),
         TripError(:final message) => _TripError(
           key: const ValueKey('error'),
           message: message,
@@ -55,6 +137,65 @@ class _TripPageState extends State<TripPage> {
           plan: plan,
         ),
       },
+    );
+  }
+}
+
+/// 未认证态：RLS 下读取恒为空，这不是错误，因此单独呈现为登录引导。
+class _TripSignInPrompt extends StatelessWidget {
+  const _TripSignInPrompt({
+    super.key,
+    required this.message,
+    required this.onSignIn,
+  });
+
+  final String message;
+  final Future<void> Function()? onSignIn;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Center(
+      key: key,
+      child: Padding(
+        padding: const EdgeInsets.all(AppTokens.spaceXl),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer,
+                shape: BoxShape.circle,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(AppTokens.spaceLg),
+                child: Icon(
+                  Icons.lock_person_outlined,
+                  size: 40,
+                  color: scheme.onPrimaryContainer,
+                ),
+              ),
+            ),
+            const SizedBox(height: AppTokens.spaceLg),
+            Text('登录后查看行程', style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: AppTokens.spaceSm),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: scheme.onSurfaceVariant,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: AppTokens.spaceLg),
+            FilledButton.icon(
+              onPressed: onSignIn,
+              icon: const Icon(Icons.login),
+              label: const Text('登录'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -107,9 +248,15 @@ class _LoadingBlock extends StatelessWidget {
 }
 
 class _TripEmpty extends StatelessWidget {
-  const _TripEmpty({super.key, required this.onCreateTrip});
+  const _TripEmpty({
+    super.key,
+    required this.onCreateTrip,
+    this.isCreating = false,
+  });
 
-  final VoidCallback onCreateTrip;
+  /// 为空时按钮禁用：后端不可写时点了没有任何反馈。
+  final VoidCallback? onCreateTrip;
+  final bool isCreating;
 
   @override
   Widget build(BuildContext context) {
@@ -146,9 +293,15 @@ class _TripEmpty extends StatelessWidget {
             ),
             const SizedBox(height: AppTokens.spaceLg),
             FilledButton.icon(
-              onPressed: onCreateTrip,
-              icon: const Icon(Icons.auto_awesome),
-              label: const Text('规划一段美食行程'),
+              onPressed: isCreating ? null : onCreateTrip,
+              icon: isCreating
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.auto_awesome),
+              label: Text(isCreating ? '正在创建…' : '规划一段美食行程'),
             ),
           ],
         ),
@@ -271,11 +424,8 @@ class _TripHeader extends StatelessWidget {
             ],
           ),
         ),
-        IconButton(
-          tooltip: '更多行程操作',
-          onPressed: () {},
-          icon: const Icon(Icons.more_horiz),
-        ),
+        // 「更多行程操作」入口待菜单项确定后再加回：本迭代没有可执行的操作，
+        // 留一个点了无反应的按钮比不放更糟。
       ],
     );
   }
