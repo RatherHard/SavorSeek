@@ -116,6 +116,47 @@ class SupabaseTripRepository implements TripRepository {
     );
   }
 
+  /// 创建行程并按日期区间补齐每一天。
+  ///
+  /// 两次 RPC 之间没有事务包裹，因此幂等键必须由调用方复用：网络中断后重试时，
+  /// 同一把键会命中 `trip_idempotency_keys` 返回原结果，而不是创建第二个行程。
+  /// 键在首次调用时生成并缓存于 [keys]，重试请传入同一个实例。
+  ///
+  /// 逐天调用 `add_trip_day` 且每次都用上一次返回的 revision：该 RPC 会把
+  /// `trips.revision` 自增，沿用旧值会在第二天触发 P0002 冲突。
+  Future<TripWriteResult> createTripWithDays({
+    required String title,
+    required DateTime startDate,
+    required DateTime endDate,
+    required CreateTripKeys keys,
+    int partySize = 1,
+    int? budgetLimitMinor,
+    String timezone = 'Asia/Shanghai',
+  }) async {
+    final created = await createTrip(
+      title: title,
+      startDate: startDate,
+      endDate: endDate,
+      timezone: timezone,
+      partySize: partySize,
+      idempotencyKey: keys.trip,
+    );
+
+    var revision = created.revision;
+    final dayCount = endDate.difference(startDate).inDays + 1;
+    for (var offset = 0; offset < dayCount; offset++) {
+      final result = await addTripDay(
+        tripId: created.id,
+        expectedRevision: revision,
+        localDate: startDate.add(Duration(days: offset)),
+        idempotencyKey: keys.dayKeyAt(offset),
+      );
+      revision = result.revision;
+    }
+
+    return TripWriteResult(id: created.id, revision: revision);
+  }
+
   /// 添加一天。[expectedRevision] 取自 `trips.revision`，不匹配时抛
   /// [TripRepositoryErrorKind.conflict]，调用方应重新读取后重试。
   Future<TripWriteResult> addTripDay({
@@ -403,6 +444,22 @@ enum PlaceCoordinateSystem {
   const PlaceCoordinateSystem(this.wireName);
 
   final String wireName;
+}
+
+/// 创建行程一次操作所用的幂等键集合。
+///
+/// 存在的意义是让重试可安全进行：`create_trip` 与逐天的 `add_trip_day` 是多次
+/// 独立 RPC，任一步之后中断，重试都必须复用同一批键，否则会创建出重复行程或
+/// 重复日期。持有同一实例即可重试。
+class CreateTripKeys {
+  CreateTripKeys({String? tripKey}) : trip = tripKey ?? generateUuidV4();
+
+  final String trip;
+  final Map<int, String> _dayKeys = {};
+
+  /// 第 [offset] 天的幂等键，按需生成后固定不变。
+  String dayKeyAt(int offset) =>
+      _dayKeys.putIfAbsent(offset, generateUuidV4);
 }
 
 /// 写入行程项所需的目标定位。

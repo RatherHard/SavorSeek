@@ -6,6 +6,7 @@ import 'package:savorseek/app/theme/design_tokens.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 import 'package:savorseek/features/auth/auth_sheet.dart';
 
+import 'create_trip_sheet.dart';
 import 'trip_controller.dart';
 import 'trip_models.dart';
 import 'trip_repository.dart';
@@ -25,6 +26,9 @@ class TripPage extends StatefulWidget {
 class _TripPageState extends State<TripPage> {
   late final TripController _controller = TripController(widget.repository);
   StreamSubscription<String?>? _authSubscription;
+
+  /// 创建进行中，用于阻止重复提交。
+  bool _isCreating = false;
 
   @override
   void initState() {
@@ -56,6 +60,50 @@ class _TripPageState extends State<TripPage> {
     if (didSignIn && mounted) await _controller.load();
   }
 
+  /// 创建行程。
+  ///
+  /// 写入只对 [SupabaseTripRepository] 可用：其余实现（未配置、演示、内存）没有
+  /// 写入能力，此时不提供入口而非让按钮点了报错。
+  Future<void> _createTrip() async {
+    final repository = widget.repository;
+    if (repository is! SupabaseTripRepository || _isCreating) return;
+
+    final draft = await showCreateTripSheet(context);
+    if (draft == null || !mounted) return;
+
+    setState(() => _isCreating = true);
+    // 幂等键在本次操作内固定：冲突重试时复用，避免创建出第二个行程。
+    final keys = CreateTripKeys();
+    try {
+      await repository.createTripWithDays(
+        title: draft.title,
+        startDate: draft.startDate,
+        endDate: draft.endDate,
+        partySize: draft.partySize,
+        budgetLimitMinor: draft.budgetLimitMinor,
+        keys: keys,
+      );
+      if (!mounted) return;
+      await _controller.load();
+      if (mounted) _showMessage('已创建行程：${draft.title}');
+    } on TripRepositoryException catch (error) {
+      if (!mounted) return;
+      _showMessage(error.message);
+      // 冲突意味着服务端状态已变，重新读一次让 UI 与之对齐。
+      if (error.kind == TripRepositoryErrorKind.conflict) {
+        await _controller.load();
+      }
+    } finally {
+      if (mounted) setState(() => _isCreating = false);
+    }
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.maybeOf(
+      context,
+    )?.showSnackBar(SnackBar(content: Text(message)));
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedSwitcher(
@@ -64,7 +112,11 @@ class _TripPageState extends State<TripPage> {
         TripLoading() => const _TripLoading(key: ValueKey('loading')),
         TripEmpty() => _TripEmpty(
           key: const ValueKey('empty'),
-          onCreateTrip: () {},
+          // 无写入能力的仓库下置空，由 _TripEmpty 把按钮禁用。
+          onCreateTrip: widget.repository is SupabaseTripRepository
+              ? _createTrip
+              : null,
+          isCreating: _isCreating,
         ),
         TripError(
           kind: TripRepositoryErrorKind.unauthenticated,
@@ -196,9 +248,15 @@ class _LoadingBlock extends StatelessWidget {
 }
 
 class _TripEmpty extends StatelessWidget {
-  const _TripEmpty({super.key, required this.onCreateTrip});
+  const _TripEmpty({
+    super.key,
+    required this.onCreateTrip,
+    this.isCreating = false,
+  });
 
-  final VoidCallback onCreateTrip;
+  /// 为空时按钮禁用：后端不可写时点了没有任何反馈。
+  final VoidCallback? onCreateTrip;
+  final bool isCreating;
 
   @override
   Widget build(BuildContext context) {
@@ -235,9 +293,15 @@ class _TripEmpty extends StatelessWidget {
             ),
             const SizedBox(height: AppTokens.spaceLg),
             FilledButton.icon(
-              onPressed: onCreateTrip,
-              icon: const Icon(Icons.auto_awesome),
-              label: const Text('规划一段美食行程'),
+              onPressed: isCreating ? null : onCreateTrip,
+              icon: isCreating
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.auto_awesome),
+              label: Text(isCreating ? '正在创建…' : '规划一段美食行程'),
             ),
           ],
         ),
@@ -360,11 +424,8 @@ class _TripHeader extends StatelessWidget {
             ],
           ),
         ),
-        IconButton(
-          tooltip: '更多行程操作',
-          onPressed: () {},
-          icon: const Icon(Icons.more_horiz),
-        ),
+        // 「更多行程操作」入口待菜单项确定后再加回：本迭代没有可执行的操作，
+        // 留一个点了无反应的按钮比不放更糟。
       ],
     );
   }
