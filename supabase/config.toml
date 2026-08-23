@@ -29,3 +29,11 @@ inspector_port = 8083
 enabled = true
 verify_jwt = true
 entrypoint = "./functions/agent/index.ts"
+
+# verify_jwt 只对 supabase CLI 的本地 functions serve 生效。自建实例上 Kong 只做
+# key-auth（校验 anon key），edge-runtime 的 VERIFY_JWT 对 main 服务无效，因此
+# places-search 在函数代码内用 auth.getUser() 自行校验用户身份。
+[functions.places-search]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/places-search/index.ts"
