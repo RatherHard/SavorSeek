@@ -26,6 +26,23 @@ trip_days(
   )
 )''';
 
+/// 行程页可执行的写入能力。
+///
+/// 抽成接口而非让 UI 依赖 [SupabaseTripRepository]：Widget 测试无法初始化
+/// Supabase，只有依赖可替换才能覆盖改期的成功、冲突与失败分支。
+abstract interface class TripWriter {
+  Future<TripWriteResult> rescheduleTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    required String tripDayId,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    String? idempotencyKey,
+  });
+}
+
 abstract interface class TripRepository {
   Future<TripPlan?> loadPlan();
 }
@@ -59,7 +76,7 @@ class UnavailableTripRepository implements TripRepository {
 /// 读写路径不对称，这是本类的核心约束：`authenticated` 角色对三张表只有
 /// `select`，insert/update/delete 已全部 revoke（见 itinerary_schema.sql:310），
 /// 因此写入必须走 `security definer` RPC，直接 `.insert()` 必然被拒。
-class SupabaseTripRepository implements TripRepository {
+class SupabaseTripRepository implements TripRepository, TripWriter {
   SupabaseTripRepository({required this.auth, SupabaseClient? client})
     : _client = client ?? Supabase.instance.client;
 
@@ -176,6 +193,41 @@ class SupabaseTripRepository implements TripRepository {
     });
     return TripWriteResult(
       id: (payload['trip_day'] as Map<String, dynamic>)['id'] as String,
+      revision: (payload['revision'] as num).toInt(),
+    );
+  }
+
+  /// 改期：调整行程项的日期、时间与时段。
+  ///
+  /// 允许跨天移动（[tripDayId] 传目标日）。不接受 position 参数：跨天后的新位置
+  /// 由服务端按目标日实际占用计算，客户端算出的值在并发下必然过期。
+  ///
+  /// 时间必须已按行程时区折算（见 `TripTimeZone.toInstant`）：库端校验开始时刻
+  /// 折回行程时区后的日期须等于目标日的 local_date，不符返回 23514。
+  @override
+  Future<TripWriteResult> rescheduleTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    required String tripDayId,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('reschedule_trip_item', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_trip_item_id': tripItemId,
+      'p_trip_day_id': tripDayId,
+      'p_planned_start_at': plannedStartAt.toUtc().toIso8601String(),
+      'p_planned_end_at': plannedEndAt.toUtc().toIso8601String(),
+      'p_time_slot': timeSlot.wireName,
+    });
+    return TripWriteResult(
+      id: (payload['trip_item'] as Map<String, dynamic>)['id'] as String,
       revision: (payload['revision'] as num).toInt(),
     );
   }

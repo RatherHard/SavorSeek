@@ -6,10 +6,13 @@ import 'package:savorseek/app/theme/design_tokens.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 import 'package:savorseek/features/auth/auth_sheet.dart';
 
+import 'add_place_to_trip.dart';
 import 'create_trip_sheet.dart';
+import 'schedule_picker_sheet.dart';
 import 'trip_controller.dart';
 import 'trip_models.dart';
 import 'trip_repository.dart';
+import 'trip_time_zone.dart';
 
 class TripPage extends StatefulWidget {
   const TripPage({super.key, required this.repository, this.auth});
@@ -29,6 +32,9 @@ class _TripPageState extends State<TripPage> {
 
   /// 创建进行中，用于阻止重复提交。
   bool _isCreating = false;
+
+  /// 改期进行中，用于阻止重复提交。
+  bool _isRescheduling = false;
 
   @override
   void initState() {
@@ -98,6 +104,89 @@ class _TripPageState extends State<TripPage> {
     }
   }
 
+  /// 改期：调整某个行程项的日期与时间。
+  ///
+  /// [TripStop.startAt] 已是行程时区下的墙上时间（见 TripMapper），可直接作为
+  /// 选择器初值，无需再做时区换算——若此处再折算一次就会双重偏移。
+  Future<void> _rescheduleStop(
+    TripPlan plan,
+    TripDay day,
+    TripStop stop,
+  ) async {
+    final repository = widget.repository;
+    final dayId = day.id ?? stop.tripDayId;
+    // 显式转换而非依赖类型提升：repository 在后续 await 与闭包中被引用，
+    // 提升不会跨越这些边界保留，写成 as 更直白也更稳定。
+    if (repository is! TripWriter) return;
+    if (dayId == null || _isRescheduling) return;
+    final writer = repository as TripWriter;
+
+    // 行程的全部日期都可作为目标，跨天移动由服务端重算 position。
+    final days = plan.days
+        .where((item) => item.id != null)
+        .map((item) => TripDayRef(id: item.id!, localDate: item.date))
+        .toList(growable: false);
+    if (days.isEmpty) return;
+
+    final trip = TripSchedulingContext(
+      tripId: plan.id,
+      revision: plan.revision,
+      timezone: plan.timezone,
+      days: days,
+    );
+    final current = days.firstWhere(
+      (item) => item.id == dayId,
+      orElse: () => days.first,
+    );
+
+    final selection = await showSchedulePickerSheet(
+      context,
+      placeName: stop.title,
+      trip: trip,
+      isReschedule: true,
+      initial: ScheduleSelection(
+        day: current,
+        hour: stop.startAt.hour,
+        minute: stop.startAt.minute,
+        duration: stop.endAt.difference(stop.startAt),
+      ),
+    );
+    if (selection == null || !mounted) return;
+
+    setState(() => _isRescheduling = true);
+    try {
+      final start = resolveInstant(
+        localDate: selection.day.localDate,
+        timezone: plan.timezone,
+        hour: selection.hour,
+        minute: selection.minute,
+      );
+      await writer.rescheduleTripItem(
+        tripId: plan.id,
+        expectedRevision: plan.revision,
+        tripItemId: stop.id,
+        tripDayId: selection.day.id,
+        plannedStartAt: start,
+        plannedEndAt: start.add(selection.duration),
+        timeSlot: selection.timeSlot,
+      );
+      if (!mounted) return;
+      await _controller.load();
+      if (mounted) _showMessage('已改期：${stop.title}');
+    } on TripRepositoryException catch (error) {
+      if (!mounted) return;
+      _showMessage(error.message);
+      // 冲突说明服务端已变，重新读一次让 revision 与 UI 对齐后用户可重试。
+      if (error.kind == TripRepositoryErrorKind.conflict) {
+        await _controller.load();
+      }
+    } on TripTimeZoneException catch (error) {
+      if (mounted) _showMessage(error.toString());
+    } finally {
+      if (mounted) setState(() => _isRescheduling = false);
+    }
+  }
+
   void _showMessage(String message) {
     ScaffoldMessenger.maybeOf(
       context,
@@ -135,6 +224,10 @@ class _TripPageState extends State<TripPage> {
         TripLoaded(:final plan) => _TripLoaded(
           key: const ValueKey('loaded'),
           plan: plan,
+          // 只有真实仓库支持写入；演示与占位实现下不给出改期入口。
+          onReschedule: widget.repository is TripWriter
+              ? (day, stop) => _rescheduleStop(plan, day, stop)
+              : null,
         ),
       },
     );
@@ -350,9 +443,12 @@ class _TripError extends StatelessWidget {
 }
 
 class _TripLoaded extends StatelessWidget {
-  const _TripLoaded({super.key, required this.plan});
+  const _TripLoaded({super.key, required this.plan, this.onReschedule});
 
   final TripPlan plan;
+
+  /// 改期回调。为空时行程项不可点。
+  final void Function(TripDay day, TripStop stop)? onReschedule;
 
   @override
   Widget build(BuildContext context) {
@@ -382,7 +478,10 @@ class _TripLoaded extends StatelessWidget {
           sliver: SliverList.builder(
             itemCount: plan.days.length,
             itemBuilder: (context, index) =>
-                _TripDayTimeline(day: plan.days[index]),
+                _TripDayTimeline(
+                  day: plan.days[index],
+                  onReschedule: onReschedule,
+                ),
           ),
         ),
       ],
@@ -512,9 +611,12 @@ class _MapPatternPainter extends CustomPainter {
 }
 
 class _TripDayTimeline extends StatelessWidget {
-  const _TripDayTimeline({required this.day});
+  const _TripDayTimeline({required this.day, this.onReschedule});
 
   final TripDay day;
+
+  /// 改期回调。为空时行程项不可点（无写入能力的仓库）。
+  final void Function(TripDay day, TripStop stop)? onReschedule;
 
   @override
   Widget build(BuildContext context) {
@@ -527,6 +629,9 @@ class _TripDayTimeline extends StatelessWidget {
           (entry) => _TimelineStop(
             stop: entry.value,
             isLast: entry.key == day.stops.length - 1,
+            onTap: onReschedule == null || !entry.value.canReschedule
+                ? null
+                : () => onReschedule!(day, entry.value),
           ),
         ),
       ],
@@ -535,10 +640,15 @@ class _TripDayTimeline extends StatelessWidget {
 }
 
 class _TimelineStop extends StatelessWidget {
-  const _TimelineStop({required this.stop, required this.isLast});
+  const _TimelineStop({
+    required this.stop,
+    required this.isLast,
+    this.onTap,
+  });
 
   final TripStop stop;
   final bool isLast;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -579,7 +689,7 @@ class _TimelineStop extends StatelessWidget {
             )
           else
             const SizedBox(width: AppTokens.spaceMd),
-          Expanded(child: _StopCard(stop: stop)),
+          Expanded(child: _StopCard(stop: stop, onTap: onTap)),
         ],
       ),
     );
@@ -593,9 +703,12 @@ class _TimelineStop extends StatelessWidget {
 }
 
 class _StopCard extends StatelessWidget {
-  const _StopCard({required this.stop});
+  const _StopCard({required this.stop, this.onTap});
 
   final TripStop stop;
+
+  /// 为空时卡片不可点：终态项与无写入能力时不该给出可点的错觉。
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -607,38 +720,53 @@ class _StopCard extends StatelessWidget {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppTokens.radiusMd),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(AppTokens.spaceMd),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    stop.title,
-                    style: Theme.of(context).textTheme.titleSmall,
+      child: InkWell(
+        // InkWell 包在 Padding 外层：涟漪应覆盖整张卡片，包在内层只有文字区域响应。
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppTokens.radiusMd),
+        child: Padding(
+          padding: const EdgeInsets.all(AppTokens.spaceMd),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      stop.title,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
+                  if (stop.isLocked)
+                    Icon(Icons.lock_outline, size: 17, color: scheme.primary),
+                  if (onTap != null) ...[
+                    const SizedBox(width: AppTokens.spaceXs),
+                    Icon(
+                      Icons.edit_calendar_outlined,
+                      size: 17,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: AppTokens.spaceXs),
+              Text(
+                stop.subtitle,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              if (stop.note case final note?) ...[
+                const SizedBox(height: AppTokens.spaceSm),
+                Text(
+                  note,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    height: 1.4,
                   ),
                 ),
-                if (stop.isLocked)
-                  Icon(Icons.lock_outline, size: 17, color: scheme.primary),
               ],
-            ),
-            const SizedBox(height: AppTokens.spaceXs),
-            Text(
-              stop.subtitle,
-              style: Theme.of(context).textTheme.bodySmall
-                  ?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-            if (stop.note case final note?) ...[
-              const SizedBox(height: AppTokens.spaceSm),
-              Text(
-                note,
-                style: Theme.of(context).textTheme.bodySmall
-                    ?.copyWith(height: 1.4),
-              ),
             ],
-          ],
+          ),
         ),
       ),
     );

@@ -4,6 +4,7 @@ import 'package:savorseek/app/theme/design_tokens.dart';
 
 import 'trip_models.dart';
 import 'trip_repository.dart';
+import 'trip_time_zone.dart';
 
 /// 排期选择结果。
 @immutable
@@ -61,24 +62,44 @@ String timeSlotLabel(TripStopType slot) {
 }
 
 /// 弹出排期选择表单。用户取消时返回 null。
+///
+/// 加入行程与改期共用此表单：两者的输入完全相同（哪天、几点、多久），差别只在
+/// 初值与文案。分成两套表单必然让「日期只能选行程已有的天」这类约束实现两遍。
 Future<ScheduleSelection?> showSchedulePickerSheet(
   BuildContext context, {
   required String placeName,
   required TripSchedulingContext trip,
+  ScheduleSelection? initial,
+  bool isReschedule = false,
 }) {
   return showModalBottomSheet<ScheduleSelection>(
     context: context,
     isScrollControlled: true,
-    builder: (context) =>
-        _SchedulePickerSheet(placeName: placeName, trip: trip),
+    builder: (context) => _SchedulePickerSheet(
+      placeName: placeName,
+      trip: trip,
+      initial: initial,
+      isReschedule: isReschedule,
+    ),
   );
 }
 
 class _SchedulePickerSheet extends StatefulWidget {
-  const _SchedulePickerSheet({required this.placeName, required this.trip});
+  const _SchedulePickerSheet({
+    required this.placeName,
+    required this.trip,
+    this.initial,
+    this.isReschedule = false,
+  });
 
   final String placeName;
   final TripSchedulingContext trip;
+
+  /// 改期时的当前排期，作为各控件初值。
+  final ScheduleSelection? initial;
+
+  /// 改期模式：影响标题与提交按钮文案。
+  final bool isReschedule;
 
   @override
   State<_SchedulePickerSheet> createState() => _SchedulePickerSheetState();
@@ -95,8 +116,13 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
   @override
   void initState() {
     super.initState();
-    _day = widget.trip.days.first;
-    _time = const TimeOfDay(hour: 12, minute: 0);
+    final initial = widget.initial;
+    // 改期时以现有排期为初值；新加入时默认首日 12:00。
+    _day = initial?.day ?? widget.trip.days.first;
+    _time = initial == null
+        ? const TimeOfDay(hour: 12, minute: 0)
+        : TimeOfDay(hour: initial.hour, minute: initial.minute);
+    _duration = initial?.duration ?? const Duration(hours: 1);
   }
 
   Future<void> _pickDate() async {
@@ -137,6 +163,31 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
     );
   }
 
+  /// 跨时区时给出设备本地时间的对照，无时差则返回 null（不显示冗余信息）。
+  String? _deviceTimeHint() {
+    final instant = TripTimeZone.toInstant(
+      timezone: widget.trip.timezone,
+      localDate: _day.localDate,
+      hour: _time.hour,
+      minute: _time.minute,
+    );
+    if (!TripTimeZone.differsFromDevice(
+      timezone: widget.trip.timezone,
+      instant: instant,
+    )) {
+      return null;
+    }
+
+    final local = instant.toLocal();
+    final difference = TripTimeZone.formatOffsetDifference(
+      timezone: widget.trip.timezone,
+      instant: instant,
+    );
+    return '行程地时间比你当前所在地 $difference；'
+        '你本地为 ${formatLocalDate(local)} '
+        '${formatWallClock(local.hour, local.minute)}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -152,7 +203,10 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('安排到店时间', style: theme.textTheme.titleLarge),
+            Text(
+              widget.isReschedule ? '调整到店时间' : '安排到店时间',
+              style: theme.textTheme.titleLarge,
+            ),
             const SizedBox(height: AppTokens.spaceXs),
             Text(
               widget.placeName,
@@ -209,6 +263,29 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
                 style: theme.textTheme.bodySmall,
               ),
             ),
+            // 跨时区行程并列显示设备本地时间：用户订机票、和家人报备时间时用的是
+            // 自己所在时区的钟点，只给当地时间会逼他心算时差。
+            if (_deviceTimeHint() case final hint?) ...[
+              const SizedBox(height: AppTokens.spaceSm),
+              Row(
+                children: [
+                  Icon(
+                    Icons.public,
+                    size: 16,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: AppTokens.spaceXs),
+                  Expanded(
+                    child: Text(
+                      hint,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: AppTokens.spaceLg),
             Row(
               children: [
@@ -222,7 +299,7 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
                 Expanded(
                   child: FilledButton(
                     onPressed: _submit,
-                    child: const Text('加入行程'),
+                    child: Text(widget.isReschedule ? '保存改期' : '加入行程'),
                   ),
                 ),
               ],

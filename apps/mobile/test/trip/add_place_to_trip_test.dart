@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savorseek/features/places/place_models.dart';
 import 'package:savorseek/features/trip/add_place_to_trip.dart';
-import 'package:savorseek/features/trip/trip_repository.dart';
+import 'package:savorseek/features/trip/trip_time_zone.dart';
 
 Place buildPlace({
   double? latitude = 38.914003,
@@ -19,6 +19,8 @@ Place buildPlace({
 }
 
 void main() {
+  setUpAll(TripTimeZone.ensureInitialized);
+
   group('buildSnapshot', () {
     test('产出满足库端约束的快照', () {
       final json = buildSnapshot(buildPlace()).toJson();
@@ -112,15 +114,36 @@ void main() {
       expect(wallClock.minute, 30);
     });
 
-    test('未知时区抛错而非静默按 UTC 处理', () {
+    test('有夏令时的时区已可支持（此前固定偏移表不支持）', () {
+      // 纽约夏季 -04:00：12:00 当地即 UTC 16:00。
+      expect(
+        resolveInstant(
+          localDate: DateTime(2026, 7, 15),
+          timezone: 'America/New_York',
+          hour: 12,
+        ),
+        DateTime.utc(2026, 7, 15, 16),
+      );
+      // 冬季 -05:00，同一钟点对应不同时刻——固定偏移表必然算错其中之一。
+      expect(
+        resolveInstant(
+          localDate: DateTime(2026, 1, 15),
+          timezone: 'America/New_York',
+          hour: 12,
+        ),
+        DateTime.utc(2026, 1, 15, 17),
+      );
+    });
+
+    test('无法识别的时区抛错而非静默按 UTC 处理', () {
       // 静默降级会写出差一天的数据，且要等库端 23514 才暴露。
       expect(
         () => resolveInstant(
           localDate: DateTime(2026, 9, 1),
-          timezone: 'America/New_York',
+          timezone: 'Mars/Olympus',
           hour: 12,
         ),
-        throwsA(isA<TripRepositoryException>()),
+        throwsA(isA<TripTimeZoneException>()),
       );
     });
   });

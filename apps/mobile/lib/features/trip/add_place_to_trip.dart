@@ -2,6 +2,7 @@ import 'package:savorseek/features/places/place_models.dart';
 
 import 'schedule_picker_sheet.dart';
 import 'trip_repository.dart';
+import 'trip_time_zone.dart';
 
 /// 把地点加入行程的能力。
 ///
@@ -81,34 +82,18 @@ PlaceSnapshot buildSnapshot(Place place) {
 /// （itinerary_schema.sql:232）。若直接用设备本地时区构造 DateTime，用户在
 /// 非行程时区（例如出差时改了手机时区）操作就会写入相邻一天并被拒。
 ///
-/// 只支持固定偏移的时区。Dart 核心库不含 IANA 时区数据库，而本项目当前所有行程
-/// 的时区都是 `Asia/Shanghai`（`trips.timezone` 的默认值）。遇到未知时区时抛错
-/// 而非静默按 UTC 处理——后者会写出差一天的数据，且难以察觉。
+/// 换算委托给 [TripTimeZone]，它基于 IANA 时区数据库，因此有夏令时的目的地也能
+/// 算对。此前这里维护一张固定偏移表，会在夏令时切换日错一小时。
 DateTime resolveInstant({
   required DateTime localDate,
   required String timezone,
   required int hour,
   int minute = 0,
 }) {
-  final offset = _fixedOffsets[timezone];
-  if (offset == null) {
-    throw TripRepositoryException('暂不支持时区 $timezone 的行程排期。');
-  }
-  // 先按 UTC 构造「墙上时间」，再减去偏移得到真正的时刻。
-  return DateTime.utc(
-    localDate.year,
-    localDate.month,
-    localDate.day,
-    hour,
-    minute,
-  ).subtract(offset);
+  return TripTimeZone.toInstant(
+    timezone: timezone,
+    localDate: localDate,
+    hour: hour,
+    minute: minute,
+  );
 }
-
-/// 已知的固定偏移时区。中国全境无夏令时，偏移恒为 +8。
-const Map<String, Duration> _fixedOffsets = {
-  'Asia/Shanghai': Duration(hours: 8),
-  'Asia/Hong_Kong': Duration(hours: 8),
-  'Asia/Macau': Duration(hours: 8),
-  'Asia/Taipei': Duration(hours: 8),
-  'UTC': Duration.zero,
-};

@@ -1,4 +1,5 @@
 import 'trip_models.dart';
+import 'trip_time_zone.dart';
 
 /// PostgREST 行数据到 UI 模型的转换层。
 ///
@@ -9,33 +10,51 @@ abstract final class TripMapper {
   ///
   /// 期望形状：`trips` 行内含 `trip_days` 数组，每个 day 内含 `trip_items` 数组。
   static TripPlan planFromRow(Map<String, dynamic> row) {
+    // 时区必须先取出：所有行程项时间都按它折算。缺失时退回库端默认值而非设备
+    // 时区——后者会让同一条行程在不同设备上显示不同时间。
+    final timezone = (row['timezone'] as String?) ?? 'Asia/Shanghai';
     final days = _listOf(row['trip_days'])
-        .map(dayFromRow)
+        .map((day) => dayFromRow(day, timezone: timezone))
         .toList(growable: false);
     return TripPlan(
       id: row['id'] as String,
       title: (row['title'] as String?) ?? '未命名行程',
       destination: destinationOf(days),
       updatedAt: _parseTimestamp(row['updated_at']),
+      timezone: timezone,
+      revision: (row['revision'] as num?)?.toInt() ?? 1,
       days: days,
     );
   }
 
-  static TripDay dayFromRow(Map<String, dynamic> row) {
+  static TripDay dayFromRow(
+    Map<String, dynamic> row, {
+    String timezone = 'Asia/Shanghai',
+  }) {
     final date = _parseDate(row['local_date'] as String);
     return TripDay(
+      id: row['id'] as String?,
       date: date,
       label: dayLabel(date),
       stops: _listOf(row['trip_items'])
-          .map(stopFromRow)
+          .map((item) => stopFromRow(item, timezone: timezone))
           .toList(growable: false),
     );
   }
 
-  static TripStop stopFromRow(Map<String, dynamic> row) {
+  static TripStop stopFromRow(
+    Map<String, dynamic> row, {
+    String timezone = 'Asia/Shanghai',
+  }) {
     final type = stopTypeFromWire(row['time_slot'] as String?);
-    final startAt = _localize(_parseTimestamp(row['planned_start_at'])!);
-    final endAt = _localize(_parseTimestamp(row['planned_end_at'])!);
+    final startAt = _toTripWallClock(
+      _parseTimestamp(row['planned_start_at'])!,
+      timezone,
+    );
+    final endAt = _toTripWallClock(
+      _parseTimestamp(row['planned_end_at'])!,
+      timezone,
+    );
     return TripStop(
       id: row['id'] as String,
       title: (row['title'] as String?) ?? '未命名地点',
@@ -46,7 +65,16 @@ abstract final class TripMapper {
       itemType: itemTypeFromWire(row['item_type'] as String?),
       note: _nonEmpty(row['notes'] as String?),
       isLocked: isLockedFrom(row),
+      tripDayId: row['trip_day_id'] as String?,
+      status: statusFromWire(row['status'] as String?),
     );
+  }
+
+  static TripItemStatus statusFromWire(String? wire) {
+    for (final value in TripItemStatus.values) {
+      if (value.wireName == wire) return value;
+    }
+    return TripItemStatus.planned;
   }
 
   /// 三个锁定标志按「任一为真」合并（缺失视为 false）。
@@ -123,13 +151,21 @@ abstract final class TripMapper {
     };
   }
 
-  /// 把 timestamptz 转为设备本地时间。
+  /// 把 timestamptz 折算为行程时区下的墙上时间。
   ///
-  /// PostgREST 返回带偏移的字符串，`DateTime.parse` 会保留 UTC 标记；不转换
-  /// 会让 UI 直接显示 UTC 时刻（如 04:30 而非 12:30）。行程自身的 `timezone`
-  /// 列目前未参与展示——跨时区行程需按该列格式化，属后续待办。
-  static DateTime _localize(DateTime value) =>
-      value.isUtc ? value.toLocal() : value;
+  /// 按行程时区而非设备时区：一条东京行程的 19:00 到店，用户在国内查看时也应显示
+  /// 19:00（当地钟面时间），而不是设备时区下的 18:00。数据模型文档第 33 行同样
+  /// 要求「必须按 `trips.timezone` 转换，不得按客户端设备时区或 UTC 判断」。
+  ///
+  /// 时区无法识别时退回设备本地时间：宁可时间显示得不准，也不能让整张行程因一个
+  /// 无法识别的时区标识而打不开。
+  static DateTime _toTripWallClock(DateTime instant, String timezone) {
+    try {
+      return TripTimeZone.toWallClock(timezone: timezone, instant: instant);
+    } on TripTimeZoneException {
+      return instant.isUtc ? instant.toLocal() : instant;
+    }
+  }
 
   static DateTime? _parseTimestamp(Object? value) {
     if (value is! String || value.isEmpty) return null;
