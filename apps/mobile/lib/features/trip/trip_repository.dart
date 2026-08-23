@@ -41,6 +41,38 @@ abstract interface class TripWriter {
     required TripStopType timeSlot,
     String? idempotencyKey,
   });
+
+  /// 取消行程项（软删除）。记录与快照保留，可经 [restoreTripItem] 恢复。
+  Future<TripWriteResult> cancelTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  });
+
+  /// 把已取消的项恢复为待安排。
+  Future<TripWriteResult> restoreTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  });
+
+  /// 彻底删除行程项。不可恢复，调用方须先向用户确认。
+  Future<int> deleteTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  });
+
+  /// 更改行程时区。已排入的项保留当地钟点，UTC 时刻由服务端重算。
+  Future<int> changeTripTimezone({
+    required String tripId,
+    required int expectedRevision,
+    required String timezone,
+    String? idempotencyKey,
+  });
 }
 
 abstract interface class TripRepository {
@@ -232,6 +264,82 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     );
   }
 
+  @override
+  Future<TripWriteResult> cancelTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('cancel_trip_item', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_trip_item_id': tripItemId,
+    });
+    return TripWriteResult(
+      id: (payload['trip_item'] as Map<String, dynamic>)['id'] as String,
+      revision: (payload['revision'] as num).toInt(),
+    );
+  }
+
+  @override
+  Future<TripWriteResult> restoreTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('restore_trip_item', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_trip_item_id': tripItemId,
+    });
+    return TripWriteResult(
+      id: (payload['trip_item'] as Map<String, dynamic>)['id'] as String,
+      revision: (payload['revision'] as num).toInt(),
+    );
+  }
+
+  /// 返回删除后行程的最新 revision。不返回项本身——它已经不存在了。
+  @override
+  Future<int> deleteTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('delete_trip_item', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_trip_item_id': tripItemId,
+    });
+    return (payload['revision'] as num).toInt();
+  }
+
+  /// 返回受影响的行程项数。
+  @override
+  Future<int> changeTripTimezone({
+    required String tripId,
+    required int expectedRevision,
+    required String timezone,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('change_trip_timezone', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_timezone': timezone,
+    });
+    return (payload['items_shifted'] as num?)?.toInt() ?? 0;
+  }
+
   /// 添加一个行程项。时间以 UTC 序列化，服务端列为 timestamptz。
   ///
   /// 两类项的必填项互斥，由库端 trigger 强制（itinerary_schema.sql:236-262）：
@@ -387,10 +495,11 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     final days = [...?(row['trip_days'] as List?)]
         .whereType<Map<String, dynamic>>()
         .map((day) {
+          // 已取消的项仍要展示：用户决策（2026-08-24）是软删除后可见且可恢复，
+          // 过滤掉就没有恢复入口了。排序时沉到当天末尾——它们不占 position
+          // （唯一索引排除 cancelled），混在中间会打乱可执行项的顺序感。
           final items = [...?(day['trip_items'] as List?)]
               .whereType<Map<String, dynamic>>()
-              // 已取消的项不参与展示，位置唯一约束也仅覆盖非取消项。
-              .where((item) => item['status'] != 'cancelled')
               .toList()
             ..sort(_byPosition);
           return {...day, 'trip_items': items};
@@ -404,6 +513,12 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
   }
 
   static int _byPosition(Map<String, dynamic> a, Map<String, dynamic> b) {
+    // 已取消的项一律排在后面：它们不参与 position 排序（唯一索引排除 cancelled），
+    // 按 position 混排会让两个不同的项显示为同一位置。
+    final aCancelled = a['status'] == 'cancelled';
+    final bCancelled = b['status'] == 'cancelled';
+    if (aCancelled != bCancelled) return aCancelled ? 1 : -1;
+
     final byPosition = ((a['position'] as num?) ?? 0).compareTo(
       (b['position'] as num?) ?? 0,
     );

@@ -178,7 +178,11 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
       return null;
     }
 
-    final local = instant.toLocal();
+    // 用 epoch 毫秒重建普通 DateTime 取设备本地时间：instant 是 TZDateTime，
+    // 其 toLocal() 走时区库而非设备时区（见 TripTimeZone.deviceOffsetAt）。
+    final local = DateTime.fromMillisecondsSinceEpoch(
+      instant.millisecondsSinceEpoch,
+    );
     final difference = TripTimeZone.formatOffsetDifference(
       timezone: widget.trip.timezone,
       instant: instant,

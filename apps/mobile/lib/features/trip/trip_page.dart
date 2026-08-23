@@ -9,6 +9,7 @@ import 'package:savorseek/features/auth/auth_sheet.dart';
 import 'add_place_to_trip.dart';
 import 'create_trip_sheet.dart';
 import 'schedule_picker_sheet.dart';
+import 'timezone_picker_sheet.dart';
 import 'trip_controller.dart';
 import 'trip_models.dart';
 import 'trip_repository.dart';
@@ -187,6 +188,132 @@ class _TripPageState extends State<TripPage> {
     }
   }
 
+  /// 分派行程项操作。
+  ///
+  /// 集中一处而非各自接线：四种操作的错误处理、冲突重载与忙碌互斥完全相同，
+  /// 分开写必然漏掉其中一条。
+  Future<void> _handleStopAction(
+    TripPlan plan,
+    TripDay day,
+    TripStop stop,
+    StopAction action,
+  ) async {
+    switch (action) {
+      case StopAction.reschedule:
+        await _rescheduleStop(plan, day, stop);
+      case StopAction.cancel:
+        await _runStopWrite(
+          plan,
+          (writer) => writer.cancelTripItem(
+            tripId: plan.id,
+            expectedRevision: plan.revision,
+            tripItemId: stop.id,
+          ),
+          success: '已取消：${stop.title}（可在行程中恢复）',
+        );
+      case StopAction.restore:
+        await _runStopWrite(
+          plan,
+          (writer) => writer.restoreTripItem(
+            tripId: plan.id,
+            expectedRevision: plan.revision,
+            tripItemId: stop.id,
+          ),
+          success: '已恢复：${stop.title}',
+        );
+      case StopAction.delete:
+        // 硬删除不可恢复，必须二次确认。取消同样能让项从计划中消失，
+        // 且可反悔，因此确认框里把这条区别讲清楚。
+        final confirmed = await _confirmDelete(stop);
+        if (!confirmed || !mounted) return;
+        await _runStopWrite(
+          plan,
+          (writer) => writer.deleteTripItem(
+            tripId: plan.id,
+            expectedRevision: plan.revision,
+            tripItemId: stop.id,
+          ),
+          success: '已删除：${stop.title}',
+        );
+    }
+  }
+
+  Future<bool> _confirmDelete(TripStop stop) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除这个行程项？'),
+        content: Text(
+          '「${stop.title}」将被彻底删除，无法恢复。\n'
+          '若只是暂时不想去，改用「取消」可以保留记录并随时恢复。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('返回'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
+  }
+
+  /// 执行一次行程项写入，统一处理忙碌互斥、冲突重载与提示。
+  Future<void> _runStopWrite(
+    TripPlan plan,
+    Future<Object?> Function(TripWriter writer) write, {
+    required String success,
+  }) async {
+    final repository = widget.repository;
+    if (repository is! TripWriter || _isRescheduling) return;
+    final writer = repository as TripWriter;
+
+    setState(() => _isRescheduling = true);
+    try {
+      await write(writer);
+      if (!mounted) return;
+      await _controller.load();
+      if (mounted) _showMessage(success);
+    } on TripRepositoryException catch (error) {
+      if (!mounted) return;
+      _showMessage(error.message);
+      if (error.kind == TripRepositoryErrorKind.conflict) {
+        await _controller.load();
+      }
+    } finally {
+      if (mounted) setState(() => _isRescheduling = false);
+    }
+  }
+
+  /// 更改行程时区。
+  ///
+  /// 已排入的项保留当地钟点（19:00 仍是 19:00），UTC 时刻由服务端重算。这是唯一
+  /// 能让项继续归属原 trip_day 的语义——保留绝对时刻会让当地日期跳到相邻一天。
+  Future<void> _changeTimezone(TripPlan plan) async {
+    final picked = await showTimezonePickerSheet(
+      context,
+      current: plan.timezone,
+    );
+    if (picked == null || picked == plan.timezone || !mounted) return;
+
+    await _runStopWrite(
+      plan,
+      (writer) => writer.changeTripTimezone(
+        tripId: plan.id,
+        expectedRevision: plan.revision,
+        timezone: picked,
+      ),
+      success: '行程时区已改为 $picked，各项保留原当地时间',
+    );
+  }
+
   void _showMessage(String message) {
     ScaffoldMessenger.maybeOf(
       context,
@@ -224,9 +351,13 @@ class _TripPageState extends State<TripPage> {
         TripLoaded(:final plan) => _TripLoaded(
           key: const ValueKey('loaded'),
           plan: plan,
-          // 只有真实仓库支持写入；演示与占位实现下不给出改期入口。
-          onReschedule: widget.repository is TripWriter
-              ? (day, stop) => _rescheduleStop(plan, day, stop)
+          // 只有真实仓库支持写入；演示与占位实现下不给出操作入口。
+          onStopAction: widget.repository is TripWriter
+              ? (day, stop, action) =>
+                    _handleStopAction(plan, day, stop, action)
+              : null,
+          onChangeTimezone: widget.repository is TripWriter
+              ? () => _changeTimezone(plan)
               : null,
         ),
       },
@@ -443,12 +574,21 @@ class _TripError extends StatelessWidget {
 }
 
 class _TripLoaded extends StatelessWidget {
-  const _TripLoaded({super.key, required this.plan, this.onReschedule});
+  const _TripLoaded({
+    super.key,
+    required this.plan,
+    this.onStopAction,
+    this.onChangeTimezone,
+  });
 
   final TripPlan plan;
 
-  /// 改期回调。为空时行程项不可点。
-  final void Function(TripDay day, TripStop stop)? onReschedule;
+  /// 行程项操作回调。为空时不给出操作入口。
+  final void Function(TripDay day, TripStop stop, StopAction action)?
+  onStopAction;
+
+  /// 更改行程时区。为空时不给出入口。
+  final VoidCallback? onChangeTimezone;
 
   @override
   Widget build(BuildContext context) {
@@ -462,7 +602,9 @@ class _TripLoaded extends StatelessWidget {
             AppTokens.spaceMd,
             AppTokens.spaceSm,
           ),
-          sliver: SliverToBoxAdapter(child: _TripHeader(plan: plan)),
+          sliver: SliverToBoxAdapter(
+            child: _TripHeader(plan: plan, onChangeTimezone: onChangeTimezone),
+          ),
         ),
         SliverPadding(
           padding: const EdgeInsets.symmetric(horizontal: AppTokens.spaceMd),
@@ -480,7 +622,7 @@ class _TripLoaded extends StatelessWidget {
             itemBuilder: (context, index) =>
                 _TripDayTimeline(
                   day: plan.days[index],
-                  onReschedule: onReschedule,
+                  onStopAction: onStopAction,
                 ),
           ),
         ),
@@ -490,13 +632,17 @@ class _TripLoaded extends StatelessWidget {
 }
 
 class _TripHeader extends StatelessWidget {
-  const _TripHeader({required this.plan});
+  const _TripHeader({required this.plan, this.onChangeTimezone});
 
   final TripPlan plan;
 
+  /// 更改时区。为空时不给出入口（无写入能力的仓库）。
+  final VoidCallback? onChangeTimezone;
+
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -506,27 +652,78 @@ class _TripHeader extends StatelessWidget {
             children: [
               Text(
                 '我的行程',
-                style: Theme.of(context).textTheme.labelLarge
-                    ?.copyWith(color: scheme.primary),
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: scheme.primary,
+                ),
               ),
               const SizedBox(height: AppTokens.spaceXs),
-              Text(
-                plan.title,
-                style: Theme.of(context).textTheme.headlineSmall,
-              ),
+              Text(plan.title, style: theme.textTheme.headlineSmall),
               const SizedBox(height: AppTokens.spaceXs),
               Text(
                 plan.destination,
-                style: Theme.of(context).textTheme.bodyMedium
-                    ?.copyWith(color: scheme.onSurfaceVariant),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
               ),
+              // 仅在与设备有时差时标注时区：同时区行程标出来是冗余噪声，
+              // 而跨时区时用户必须知道表上的钟点是哪儿的时间。
+              if (_timezoneNotice(plan) case final notice?) ...[
+                const SizedBox(height: AppTokens.spaceSm),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.public,
+                      size: 14,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: AppTokens.spaceXs),
+                    Text(
+                      notice,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
-        // 「更多行程操作」入口待菜单项确定后再加回：本迭代没有可执行的操作，
-        // 留一个点了无反应的按钮比不放更糟。
+        if (onChangeTimezone != null)
+          IconButton(
+            tooltip: '更改行程时区',
+            onPressed: onChangeTimezone,
+            icon: const Icon(Icons.public),
+          ),
       ],
     );
+  }
+
+  /// 与设备存在时差时给出「时间按 X 显示」的说明，否则返回 null。
+  static String? _timezoneNotice(TripPlan plan) {
+    try {
+      final reference = plan.days.isEmpty
+          ? DateTime.now().toUtc()
+          : TripTimeZone.toInstant(
+              timezone: plan.timezone,
+              localDate: plan.days.first.date,
+              hour: 12,
+            );
+      if (!TripTimeZone.differsFromDevice(
+        timezone: plan.timezone,
+        instant: reference,
+      )) {
+        return null;
+      }
+      final difference = TripTimeZone.formatOffsetDifference(
+        timezone: plan.timezone,
+        instant: reference,
+      );
+      return '时间按 ${plan.timezone} 显示（与你所在地相差 $difference）';
+    } on TripTimeZoneException {
+      // 时区无法识别时不标注：此时时间已退回设备时区，标注反而是误导。
+      return null;
+    }
   }
 }
 
@@ -611,12 +808,13 @@ class _MapPatternPainter extends CustomPainter {
 }
 
 class _TripDayTimeline extends StatelessWidget {
-  const _TripDayTimeline({required this.day, this.onReschedule});
+  const _TripDayTimeline({required this.day, this.onStopAction});
 
   final TripDay day;
 
-  /// 改期回调。为空时行程项不可点（无写入能力的仓库）。
-  final void Function(TripDay day, TripStop stop)? onReschedule;
+  /// 行程项操作回调。为空时不给出任何操作入口（无写入能力的仓库）。
+  final void Function(TripDay day, TripStop stop, StopAction action)?
+  onStopAction;
 
   @override
   Widget build(BuildContext context) {
@@ -629,9 +827,13 @@ class _TripDayTimeline extends StatelessWidget {
           (entry) => _TimelineStop(
             stop: entry.value,
             isLast: entry.key == day.stops.length - 1,
-            onTap: onReschedule == null || !entry.value.canReschedule
+            // 点卡片即改期，是最常用的操作；其余操作走菜单。
+            onTap: onStopAction == null || !entry.value.canReschedule
                 ? null
-                : () => onReschedule!(day, entry.value),
+                : () => onStopAction!(day, entry.value, StopAction.reschedule),
+            onMenuAction: onStopAction == null
+                ? null
+                : (action) => onStopAction!(day, entry.value, action),
           ),
         ),
       ],
@@ -644,11 +846,13 @@ class _TimelineStop extends StatelessWidget {
     required this.stop,
     required this.isLast,
     this.onTap,
+    this.onMenuAction,
   });
 
   final TripStop stop;
   final bool isLast;
   final VoidCallback? onTap;
+  final ValueChanged<StopAction>? onMenuAction;
 
   @override
   Widget build(BuildContext context) {
@@ -689,7 +893,13 @@ class _TimelineStop extends StatelessWidget {
             )
           else
             const SizedBox(width: AppTokens.spaceMd),
-          Expanded(child: _StopCard(stop: stop, onTap: onTap)),
+          Expanded(
+            child: _StopCard(
+              stop: stop,
+              onTap: onTap,
+              onMenuAction: onMenuAction,
+            ),
+          ),
         ],
       ),
     );
@@ -703,16 +913,20 @@ class _TimelineStop extends StatelessWidget {
 }
 
 class _StopCard extends StatelessWidget {
-  const _StopCard({required this.stop, this.onTap});
+  const _StopCard({required this.stop, this.onTap, this.onMenuAction});
 
   final TripStop stop;
 
   /// 为空时卡片不可点：终态项与无写入能力时不该给出可点的错觉。
   final VoidCallback? onTap;
 
+  /// 操作菜单回调。为空时不显示菜单。
+  final ValueChanged<StopAction>? onMenuAction;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isCancelled = stop.status == TripItemStatus.cancelled;
     return Card(
       margin: const EdgeInsets.only(bottom: AppTokens.spaceSm),
       elevation: 0,
@@ -734,18 +948,27 @@ class _StopCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       stop.title,
-                      style: Theme.of(context).textTheme.titleSmall,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        // 已取消的项加删除线：一眼可辨，且不必读文字就知道状态。
+                        decoration: isCancelled
+                            ? TextDecoration.lineThrough
+                            : null,
+                        color: isCancelled ? scheme.onSurfaceVariant : null,
+                      ),
                     ),
                   ),
+                  if (isCancelled)
+                    Text(
+                      '已取消',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
                   if (stop.isLocked)
                     Icon(Icons.lock_outline, size: 17, color: scheme.primary),
-                  if (onTap != null) ...[
+                  if (onMenuAction != null) ...[
                     const SizedBox(width: AppTokens.spaceXs),
-                    Icon(
-                      Icons.edit_calendar_outlined,
-                      size: 17,
-                      color: scheme.onSurfaceVariant,
-                    ),
+                    _StopMenu(stop: stop, onSelected: onMenuAction!),
                   ],
                 ],
               ),
@@ -754,6 +977,7 @@ class _StopCard extends StatelessWidget {
                 stop.subtitle,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: scheme.onSurfaceVariant,
+                  decoration: isCancelled ? TextDecoration.lineThrough : null,
                 ),
               ),
               if (stop.note case final note?) ...[
@@ -769,6 +993,78 @@ class _StopCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 行程项可执行的操作。
+enum StopAction { reschedule, cancel, restore, delete }
+
+/// 行程项的操作菜单。
+///
+/// 按状态给出不同选项而非全部列出后禁用：终态项的「改期」永远不可用，列出来
+/// 只会让用户反复尝试。
+class _StopMenu extends StatelessWidget {
+  const _StopMenu({required this.stop, required this.onSelected});
+
+  final TripStop stop;
+  final ValueChanged<StopAction> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final isCancelled = stop.status == TripItemStatus.cancelled;
+    // 已完成/已跳过的项是历史事实，库端拒绝任何变更，故不给菜单。
+    if (stop.status == TripItemStatus.completed ||
+        stop.status == TripItemStatus.skipped) {
+      return const SizedBox.shrink();
+    }
+
+    return PopupMenuButton<StopAction>(
+      onSelected: onSelected,
+      tooltip: '行程项操作',
+      icon: const Icon(Icons.more_vert, size: 18),
+      itemBuilder: (context) => [
+        if (!isCancelled) ...[
+          const PopupMenuItem(
+            value: StopAction.reschedule,
+            child: ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.edit_calendar_outlined),
+              title: Text('改期'),
+            ),
+          ),
+          const PopupMenuItem(
+            value: StopAction.cancel,
+            child: ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.event_busy_outlined),
+              title: Text('取消'),
+              subtitle: Text('保留记录，可恢复'),
+            ),
+          ),
+        ] else
+          const PopupMenuItem(
+            value: StopAction.restore,
+            child: ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.restore),
+              title: Text('恢复'),
+            ),
+          ),
+        const PopupMenuItem(
+          value: StopAction.delete,
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.delete_outline),
+            title: Text('删除'),
+            subtitle: Text('不可恢复'),
+          ),
+        ),
+      ],
     );
   }
 }

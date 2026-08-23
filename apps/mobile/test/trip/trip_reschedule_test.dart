@@ -42,6 +42,62 @@ class FakeWritableRepository implements TripRepository, TripWriter {
     _plan = _plan.copyWith(revision: _plan.revision + 1);
     return TripWriteResult(id: tripItemId, revision: _plan.revision);
   }
+
+  @override
+  Future<TripWriteResult> cancelTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  }) async {
+    calls.add({'op': 'cancel', 'tripItemId': tripItemId});
+    final failure = error;
+    if (failure != null) throw failure;
+    _plan = _plan.copyWith(revision: _plan.revision + 1);
+    return TripWriteResult(id: tripItemId, revision: _plan.revision);
+  }
+
+  @override
+  Future<TripWriteResult> restoreTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  }) async {
+    calls.add({'op': 'restore', 'tripItemId': tripItemId});
+    final failure = error;
+    if (failure != null) throw failure;
+    _plan = _plan.copyWith(revision: _plan.revision + 1);
+    return TripWriteResult(id: tripItemId, revision: _plan.revision);
+  }
+
+  @override
+  Future<int> deleteTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    String? idempotencyKey,
+  }) async {
+    calls.add({'op': 'delete', 'tripItemId': tripItemId});
+    final failure = error;
+    if (failure != null) throw failure;
+    _plan = _plan.copyWith(revision: _plan.revision + 1);
+    return _plan.revision;
+  }
+
+  @override
+  Future<int> changeTripTimezone({
+    required String tripId,
+    required int expectedRevision,
+    required String timezone,
+    String? idempotencyKey,
+  }) async {
+    calls.add({'op': 'timezone', 'timezone': timezone});
+    final failure = error;
+    if (failure != null) throw failure;
+    _plan = _plan.copyWith(timezone: timezone, revision: _plan.revision + 1);
+    return _plan.days.fold<int>(0, (sum, day) => sum + day.stops.length);
+  }
 }
 
 /// 只读仓库，用于验证无写入能力时不给出改期入口。
@@ -95,7 +151,7 @@ void main() {
 
     // 东京 19:00，而非设备时区折算出的 18:00。
     expect(find.text('晚餐 · 19:00–20:00'), findsOneWidget);
-    expect(find.byIcon(Icons.edit_calendar_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.more_vert), findsOneWidget);
   });
 
   testWidgets('只读仓库不给出改期入口', (tester) async {
@@ -103,14 +159,16 @@ void main() {
     await tester.pumpAndSettle();
 
     // 点了没有反馈的入口比没有入口更糟。
-    expect(find.byIcon(Icons.edit_calendar_outlined), findsNothing);
+    expect(find.byIcon(Icons.more_vert), findsNothing);
   });
 
   testWidgets('改期表单以现有排期为初值', (tester) async {
     await tester.pumpWidget(wrap(FakeWritableRepository(buildTokyoPlan())));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.edit_calendar_outlined));
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('改期'));
     await tester.pumpAndSettle();
 
     expect(find.text('调整到店时间'), findsOneWidget);
@@ -128,7 +186,9 @@ void main() {
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.edit_calendar_outlined));
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('改期'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('保存改期'));
     await tester.pumpAndSettle();
@@ -153,7 +213,9 @@ void main() {
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.edit_calendar_outlined));
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('改期'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('保存改期'));
     await tester.pump();
@@ -166,7 +228,9 @@ void main() {
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.edit_calendar_outlined));
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('改期'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
@@ -205,6 +269,6 @@ void main() {
     await tester.pumpAndSettle();
 
     // 给已完成的到访改时间会让历史失真，库端也会拒绝。
-    expect(find.byIcon(Icons.edit_calendar_outlined), findsNothing);
+    expect(find.byIcon(Icons.more_vert), findsNothing);
   });
 }

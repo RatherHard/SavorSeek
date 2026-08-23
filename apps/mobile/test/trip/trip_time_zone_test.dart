@@ -181,6 +181,33 @@ void main() {
       }
     });
 
+    test('toInstant 的返回值不会被误判为有时差', () {
+      // 回归：toInstant 返回 TZDateTime，其 toLocal().timeZoneOffset 恒为 0，
+      // 直接用它比较会让与设备同偏移的时区被误判为有时差。
+      final instant = TripTimeZone.toInstant(
+        timezone: 'Asia/Shanghai',
+        localDate: DateTime(2026, 9, 1),
+        hour: 12,
+      );
+      final deviceOffset = TripTimeZone.deviceOffsetAt(instant);
+
+      expect(
+        TripTimeZone.differsFromDevice(
+          timezone: 'Asia/Shanghai',
+          instant: instant,
+        ),
+        deviceOffset != const Duration(hours: 8),
+        reason: '设备偏移为 $deviceOffset 时的判定不符预期',
+      );
+    });
+
+    test('deviceOffsetAt 与 DateTime.now 的偏移一致', () {
+      expect(
+        TripTimeZone.deviceOffsetAt(DateTime.utc(2026, 9, 1, 4)),
+        DateTime.now().timeZoneOffset,
+      );
+    });
+
     test('同偏移时区之间判定为无时差', () {
       // Asia/Macau 与 Asia/Shanghai 名称不同但恒为 +08:00。
       final instant = DateTime.utc(2026, 9, 1, 4);

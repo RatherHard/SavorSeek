@@ -90,8 +90,19 @@ abstract final class TripTimeZone {
     required String timezone,
     required DateTime instant,
   }) {
-    final tripOffset = offsetAt(timezone: timezone, instant: instant);
-    return tripOffset != instant.toLocal().timeZoneOffset;
+    return offsetAt(timezone: timezone, instant: instant) !=
+        deviceOffsetAt(instant);
+  }
+
+  /// 设备时区在某一时刻的 UTC 偏移。
+  ///
+  /// 不能用 `instant.toLocal().timeZoneOffset`：`toInstant` 返回的是 `TZDateTime`
+  /// （DateTime 的子类），其 `toLocal()` 仍走时区库而非设备时区，偏移恒为 0，
+  /// 会让同时区行程被误判为有时差。故显式构造一个普通 DateTime 再取偏移。
+  static Duration deviceOffsetAt(DateTime instant) {
+    return DateTime.fromMillisecondsSinceEpoch(
+      instant.millisecondsSinceEpoch,
+    ).timeZoneOffset;
   }
 
   /// 时差的可读表述，如 `+1 小时`、`-3 小时`、`+1 小时 30 分`。
@@ -101,7 +112,7 @@ abstract final class TripTimeZone {
   }) {
     final delta =
         offsetAt(timezone: timezone, instant: instant) -
-        instant.toLocal().timeZoneOffset;
+        deviceOffsetAt(instant);
     if (delta == Duration.zero) return '无时差';
 
     final sign = delta.isNegative ? '-' : '+';
@@ -125,6 +136,9 @@ abstract final class TripTimeZone {
   /// `latest_10y` 数据集只收录 `Etc/UTC` 而没有裸 `UTC`，但 `trips.timezone` 完全
   /// 可能存 `UTC`（PostgreSQL 的 `pg_timezone_names` 收录该名称，库端校验会通过）。
   /// 不做映射会让这类行程在客户端直接报「无法识别时区」。
+  /// `latest_10y` 只收录规则各异的代表性时区，把规则相同的并入一个标识。
+  /// 被并掉的名称（如 `Asia/Kuala_Lumpur`）在 PostgreSQL 中合法，库端校验会通过，
+  /// 因此客户端必须能解析，否则这类行程在客户端报「无法识别时区」。
   static const Map<String, String> _aliases = {
     'UTC': 'Etc/UTC',
     'GMT': 'Etc/GMT',
@@ -132,6 +146,8 @@ abstract final class TripTimeZone {
     'Etc/UCT': 'Etc/UTC',
     'Universal': 'Etc/UTC',
     'Zulu': 'Etc/UTC',
+    // 与 Asia/Singapore 规则一致（恒为 +08:00，无夏令时）。
+    'Asia/Kuala_Lumpur': 'Asia/Singapore',
   };
 
   static tz.Location? _lookup(String timezone) {
