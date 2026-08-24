@@ -195,6 +195,39 @@ class FakeWritableRepository implements TripRepository, TripWriter {
   }
 
   @override
+  Future<TripWriteResult> addPlaceItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripDayId,
+    required String placeId,
+    required String title,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    double? latitude,
+    double? longitude,
+    String? notes,
+    String? idempotencyKey,
+  }) async {
+    calls.add({
+      'op': 'addPlace',
+      'tripDayId': tripDayId,
+      'placeId': placeId,
+      'title': title,
+      'startUtc': plannedStartAt.toUtc().toIso8601String(),
+      'endUtc': plannedEndAt.toUtc().toIso8601String(),
+      'timeSlot': timeSlot.wireName,
+      'latitude': latitude,
+      'longitude': longitude,
+      'notes': notes,
+    });
+    final failure = error;
+    if (failure != null) throw failure;
+    _plan = _plan.copyWith(revision: _plan.revision + 1);
+    return TripWriteResult(id: 'new-place-item', revision: _plan.revision);
+  }
+
+  @override
   Future<int> countItemsOnDay(String tripDayId) async {
     for (final day in _plan.days) {
       if (day.id == tripDayId) {

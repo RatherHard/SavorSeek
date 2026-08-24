@@ -290,6 +290,64 @@ class TripStopActions {
     );
   }
 
+  /// 添加一个地点节点。
+  ///
+  /// 与 [addBreak] 的差别只在坐标：地点节点带 `place_snapshot`，因此能上地图。
+  /// [latitude] / [longitude] 为空时仍会写入，只是该节点不参与路线绘制。
+  Future<void> addPlace({
+    required TripPlan plan,
+    required String tripDayId,
+    required DateTime dayDate,
+    required String placeId,
+    required String title,
+    required int hour,
+    required int minute,
+    required Duration duration,
+    required TripStopType timeSlot,
+    double? latitude,
+    double? longitude,
+    String? notes,
+  }) async {
+    // 新项的 id 只能从写入结果取得，故用可变量在写入闭包与撤销闭包之间传递。
+    String? createdId;
+    await _run(
+      (writer) async {
+        final start = _instant(
+          localDate: dayDate,
+          timezone: plan.timezone,
+          hour: hour,
+          minute: minute,
+        );
+        final result = await writer.addPlaceItem(
+          tripId: plan.id,
+          expectedRevision: plan.revision,
+          tripDayId: tripDayId,
+          placeId: placeId,
+          title: title,
+          plannedStartAt: start,
+          plannedEndAt: start.add(duration),
+          timeSlot: timeSlot,
+          latitude: latitude,
+          longitude: longitude,
+          notes: notes,
+        );
+        createdId = result.id;
+        return result;
+      },
+      success: '已加入行程：$title',
+      // 逆操作是删除刚建的那一项。
+      undo: TripUndo((writer, revision) async {
+        final id = createdId;
+        if (id == null) return;
+        await writer.deleteTripItem(
+          tripId: plan.id,
+          expectedRevision: revision,
+          tripItemId: id,
+        );
+      }),
+    );
+  }
+
   /// 修改节点的标题与备注。
   Future<void> updateItem({
     required TripPlan plan,

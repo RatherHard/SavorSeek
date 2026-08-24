@@ -127,13 +127,28 @@ void main() {
       expect(result.routeStops.length, 2);
     });
 
-    test('只有一个可定位节点时地图不可用', () {
+    test('只有一个可定位节点时地图仍可用', () {
+      // 一个点也值得上图：用户想知道它在哪。只是没有「路线」可画，
+      // 由 hasRouteLine 单独表达，地图据此省略连线。
       final result = TripMapper.planFromRow(
         plan([item(id: '1', snapshot: snapshotA), item(id: '2', position: 1)]),
       );
 
+      expect(result.mapState, TripMapState.available);
+      expect(result.hasRoute, isTrue);
+      expect(result.routeStops.length, 1);
+      expect(result.hasRouteLine, isFalse);
+    });
+
+    test('没有任何可定位节点时地图不可用', () {
+      // 全是自由安排节点，无从定位，此时才该说明为何没有地图。
+      final result = TripMapper.planFromRow(
+        plan([item(id: '1'), item(id: '2', position: 1)]),
+      );
+
       expect(result.mapState, TripMapState.unavailable);
       expect(result.hasRoute, isFalse);
+      expect(result.hasRouteLine, isFalse);
     });
 
     test('已取消的节点不进入路线', () {
@@ -146,7 +161,9 @@ void main() {
       );
 
       expect(result.routeStops.length, 1);
-      expect(result.hasRoute, isFalse);
+      // 剩下的一个点仍可定位，但连不成线。
+      expect(result.hasRoute, isTrue);
+      expect(result.hasRouteLine, isFalse);
     });
 
     test('路线节点保持时间顺序', () {

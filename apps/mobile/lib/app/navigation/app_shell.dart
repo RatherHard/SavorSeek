@@ -60,6 +60,7 @@ class _AppShellState extends State<AppShell> {
               auth: widget.dependencies.auth,
               mapConsent: widget.dependencies.mapConsent,
               routeService: widget.dependencies.routeService,
+              placeRepository: widget.dependencies.placeRepository,
             ),
             MinePage(auth: widget.dependencies.auth),
           ],

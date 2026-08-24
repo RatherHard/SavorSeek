@@ -93,8 +93,9 @@ abstract interface class TripWriter {
 
   /// 添加一个自由安排节点（`break`）。
   ///
-  /// 只暴露 `break` 这一种：地点项必须携带 placeId 与快照（库端 trigger 强制），
-  /// 而行程页没有地点检索能力，地点节点仍从探索页加入。
+  /// 与 [addPlaceItem] 分成两个方法而非共用一个带可选参数的版本：库端 trigger 要求
+  /// `break` 不得带 placeId 与快照、`place_visit` 必须两者都带，合成一个方法就得在
+  /// 运行期校验这组互斥，拆开后由签名本身保证。
   Future<TripWriteResult> addBreakItem({
     required String tripId,
     required int expectedRevision,
@@ -103,6 +104,26 @@ abstract interface class TripWriter {
     required DateTime plannedStartAt,
     required DateTime plannedEndAt,
     required TripStopType timeSlot,
+    String? notes,
+    String? idempotencyKey,
+  });
+
+  /// 添加一个地点节点（`place_visit`）。
+  ///
+  /// [latitude] 与 [longitude] 必须同时给出或同时省略（库端 trigger 强制）。缺坐标
+  /// 的地点仍可加入：高德偶有 POI 无坐标，为此拒绝写入等于因为地图画不出就不让用户
+  /// 排这家店。此时该节点不参与路线绘制。
+  Future<TripWriteResult> addPlaceItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripDayId,
+    required String placeId,
+    required String title,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    double? latitude,
+    double? longitude,
     String? notes,
     String? idempotencyKey,
   });
@@ -720,6 +741,47 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
       timeSlot: timeSlot,
       itemType: TripItemType.break_,
       position: position,
+      notes: notes,
+      idempotencyKey: idempotencyKey,
+    );
+  }
+
+  /// 添加一个地点节点。position 由 [countItemsOnDay] 推导，与 [addBreakItem] 一致。
+  ///
+  /// 快照在此构造而非由调用方传入：`schema_version` 与 `coordinate_system` 是库端
+  /// trigger 校验的固定值（itinerary_schema.sql:243-259），让每个调用方各填一遍
+  /// 迟早有一处填错。
+  @override
+  Future<TripWriteResult> addPlaceItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripDayId,
+    required String placeId,
+    required String title,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    double? latitude,
+    double? longitude,
+    String? notes,
+    String? idempotencyKey,
+  }) async {
+    final position = await countItemsOnDay(tripDayId);
+    // 坐标成对齐全才写入：库端要求两者同时给出或同时省略，只给其一会被拒。
+    final hasCoordinates = latitude != null && longitude != null;
+    return addTripItem(
+      tripId: tripId,
+      expectedRevision: expectedRevision,
+      tripDayId: tripDayId,
+      title: title,
+      plannedStartAt: plannedStartAt,
+      plannedEndAt: plannedEndAt,
+      timeSlot: timeSlot,
+      position: position,
+      placeId: placeId,
+      placeSnapshot: hasCoordinates
+          ? PlaceSnapshot(name: title, latitude: latitude, longitude: longitude)
+          : PlaceSnapshot(name: title),
       notes: notes,
       idempotencyKey: idempotencyKey,
     );

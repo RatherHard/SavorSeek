@@ -6,9 +6,11 @@ import 'package:savorseek/app/theme/design_tokens.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 import 'package:savorseek/features/auth/auth_sheet.dart';
 import 'package:savorseek/features/explore/amap_consent.dart';
+import 'package:savorseek/features/places/place_repository.dart';
 
 import 'add_stop_sheet.dart';
 import 'edit_stop_sheet.dart';
+import 'pick_place_sheet.dart';
 import 'schedule_picker_sheet.dart';
 import 'timezone_picker_sheet.dart';
 import 'trip_controller.dart';
@@ -40,6 +42,7 @@ class TripDetailPage extends StatefulWidget {
     this.auth,
     this.mapConsent,
     this.routeService,
+    this.placeRepository,
   });
 
   final TripRepository repository;
@@ -55,6 +58,12 @@ class TripDetailPage extends StatefulWidget {
 
   /// 真实路网路线来源。为空时地图退化为直线连接。
   final TripRouteService? routeService;
+
+  /// 地点检索能力。为空时不提供「添加地点」入口。
+  ///
+  /// 地点节点是路线能成立的前提——只有它带坐标。此前唯一入口在探索页，用户在行程
+  /// 里发现缺一家店时得先离开行程去搜索再切回来。
+  final PlaceRepository? placeRepository;
 
   @override
   State<TripDetailPage> createState() => _TripDetailPageState();
@@ -342,10 +351,7 @@ class _TripDetailPageState extends State<TripDetailPage> {
     final actions = _actions;
     if (actions == null) return;
 
-    final days = plan.days
-        .where((item) => item.id != null)
-        .map((item) => TripDayRef(id: item.id!, localDate: item.date))
-        .toList(growable: false);
+    final days = _dayRefsOf(plan);
     if (days.isEmpty) {
       _showMessage('行程还没有可安排的日期。');
       return;
@@ -373,6 +379,60 @@ class _TripDetailPageState extends State<TripDetailPage> {
       timeSlot: draft.selection.timeSlot,
       notes: draft.note,
     );
+  }
+
+  /// 加一个地点节点：先选店，再选排期，最后写入。
+  ///
+  /// 顺序与探索页的「加入行程」一致——时间选择器需要行程已有的日期列表来限定可选
+  /// 范围，而库端要求项归属的 trip_day 必须已存在。
+  Future<void> _addPlace(TripPlan plan) async {
+    final actions = _actions;
+    final places = widget.placeRepository;
+    if (actions == null || places == null) return;
+
+    final days = _dayRefsOf(plan);
+    if (days.isEmpty) {
+      _showMessage('行程还没有可安排的日期。');
+      return;
+    }
+
+    final place = await showPickPlaceSheet(context, placeRepository: places);
+    if (place == null || !mounted) return;
+
+    final selection = await showSchedulePickerSheet(
+      context,
+      placeName: place.name,
+      trip: TripSchedulingContext(
+        tripId: plan.id,
+        revision: plan.revision,
+        timezone: plan.timezone,
+        days: days,
+      ),
+    );
+    // 用户取消时静默返回：他没有失败，不该看到提示。
+    if (selection == null || !mounted) return;
+
+    await actions.addPlace(
+      plan: plan,
+      tripDayId: selection.day.id,
+      dayDate: selection.day.localDate,
+      placeId: place.id,
+      title: place.name,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      hour: selection.hour,
+      minute: selection.minute,
+      duration: selection.duration,
+      timeSlot: selection.timeSlot,
+    );
+  }
+
+  /// 行程中可供排期的日期。缺 id 的天来自演示数据，无法作为写入目标。
+  List<TripDayRef> _dayRefsOf(TripPlan plan) {
+    return plan.days
+        .where((item) => item.id != null)
+        .map((item) => TripDayRef(id: item.id!, localDate: item.date))
+        .toList(growable: false);
   }
 
   /// 更改行程时区。
@@ -470,6 +530,9 @@ class _TripDetailPageState extends State<TripDetailPage> {
                   : (day, stop, action) =>
                         _handleStopAction(plan, day, stop, action),
               onAddStop: _actions == null ? null : () => _addStop(plan),
+              onAddPlace: _actions == null || widget.placeRepository == null
+                  ? null
+                  : () => _addPlace(plan),
               mapConsent: widget.mapConsent,
               routeService: widget.routeService,
               onOpenRoute: widget.mapConsent == null
@@ -495,6 +558,7 @@ class _TripDetail extends StatelessWidget {
     required this.plan,
     this.onStopAction,
     this.onAddStop,
+    this.onAddPlace,
     this.mapConsent,
     this.routeService,
     this.onOpenRoute,
@@ -514,6 +578,9 @@ class _TripDetail extends StatelessWidget {
   /// 添加行程节点。为空时不给出入口。
   final VoidCallback? onAddStop;
 
+  /// 添加地点节点。为空时不给出入口（未注入地点检索能力）。
+  final VoidCallback? onAddPlace;
+
   final AmapConsent? mapConsent;
   final TripRouteService? routeService;
 
@@ -531,7 +598,7 @@ class _TripDetail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scroll = _buildScrollView(context);
-    if (onAddStop == null && !_isSelecting) {
+    if (onAddStop == null && onAddPlace == null && !_isSelecting) {
       return KeyedSubtree(key: key, child: scroll);
     }
     return Stack(
@@ -552,14 +619,29 @@ class _TripDetail extends StatelessWidget {
               onExit: onClearSelection,
             ),
           )
-        else if (onAddStop != null)
+        else if (onAddStop != null || onAddPlace != null)
           Positioned(
             right: AppTokens.spaceMd,
             bottom: AppTokens.spaceMd,
-            child: FloatingActionButton.extended(
-              onPressed: onAddStop,
-              icon: const Icon(Icons.add),
-              label: const Text('添加节点'),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                // 地点在上、自由安排在下：地点是更常做的事，也是路线能成立的前提。
+                if (onAddPlace case final addPlace?) ...[
+                  FloatingActionButton.small(
+                    onPressed: addPlace,
+                    tooltip: '添加地点',
+                    child: const Icon(Icons.add_location_alt_outlined),
+                  ),
+                  const SizedBox(height: AppTokens.spaceSm),
+                ],
+                if (onAddStop case final addStop?)
+                  FloatingActionButton.extended(
+                    onPressed: addStop,
+                    icon: const Icon(Icons.add),
+                    label: const Text('添加节点'),
+                  ),
+              ],
             ),
           ),
       ],
@@ -581,8 +663,8 @@ class _TripDetail extends StatelessWidget {
         SliverPadding(
           padding: const EdgeInsets.symmetric(horizontal: AppTokens.spaceMd),
           sliver: SliverToBoxAdapter(
-            // 有两个以上可定位节点才画路线；否则说明为何没有地图，
-            // 而不是显示一张只有一个点的图。
+            // 一个可定位节点即可上图；一个都没有时说明缺的是地点，
+            // 并就地给出添加入口。
             child: plan.hasRoute && mapConsent != null
                 ? TripRouteMap(
                     plan: plan,
@@ -590,7 +672,10 @@ class _TripDetail extends StatelessWidget {
                     routeService: routeService,
                     onTap: onOpenRoute,
                   )
-                : TripMapFallback(state: plan.mapState),
+                : TripMapFallback(
+                    state: plan.mapState,
+                    onAddPlace: onAddPlace,
+                  ),
           ),
         ),
         SliverPadding(

@@ -6,6 +6,7 @@ import 'package:savorseek/app/theme/design_tokens.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 import 'package:savorseek/features/auth/auth_sheet.dart';
 import 'package:savorseek/features/explore/amap_consent.dart';
+import 'package:savorseek/features/places/place_repository.dart';
 
 import 'create_trip_sheet.dart';
 import 'trip_detail_page.dart';
@@ -26,6 +27,7 @@ class TripListPage extends StatefulWidget {
     this.auth,
     this.mapConsent,
     this.routeService,
+    this.placeRepository,
   });
 
   final TripRepository repository;
@@ -38,6 +40,9 @@ class TripListPage extends StatefulWidget {
 
   /// 真实路网路线来源。为空时详情页的地图退化为直线连接。
   final TripRouteService? routeService;
+
+  /// 地点检索能力。为空时详情页不提供「添加地点」入口。
+  final PlaceRepository? placeRepository;
 
   @override
   State<TripListPage> createState() => _TripListPageState();
@@ -96,6 +101,7 @@ class _TripListPageState extends State<TripListPage> {
           auth: widget.auth,
           mapConsent: widget.mapConsent,
           routeService: widget.routeService,
+          placeRepository: widget.placeRepository,
         ),
       ),
     );

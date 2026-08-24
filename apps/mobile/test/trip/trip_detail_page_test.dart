@@ -57,8 +57,8 @@ void main() {
 
     // 标题在 AppBar 上，由本页自己提供（本页盖住了 AppShell 的主导航）。
     expect(find.text('杭州一日寻味'), findsOneWidget);
-    // 可定位节点不足两个，故不画路线而是说明原因。
-    expect(find.text('地图路线暂不可用'), findsOneWidget);
+    // 一个可定位节点都没有，故说明缺的是地点而非地图能力。
+    expect(find.text('还没有地点节点'), findsOneWidget);
     expect(find.text('片儿川'), findsWidgets);
     expect(find.byIcon(Icons.lock_outline), findsOneWidget);
   });

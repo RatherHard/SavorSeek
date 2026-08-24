@@ -216,8 +216,17 @@ class TripPlan {
     ];
   }
 
-  /// 地图能否绘制路线。至少要两个可定位节点才谈得上「路径」。
-  bool get hasRoute => routeStops.length >= 2;
+  /// 地图能否呈现这份行程。一个可定位节点就够。
+  ///
+  /// 不要求两个：只有一个地点时地图仍有信息量（它在城市的哪一侧、离住处多远），
+  /// 拿占位图盖掉它等于把已有的信息藏起来。能否画连线是另一回事，见
+  /// [hasRouteLine]。
+  bool get hasRoute => routeStops.isNotEmpty;
+
+  /// 能否画出连线。至少要两个可定位节点才谈得上「路径」。
+  ///
+  /// 与 [hasRoute] 分开：地图该不该出现、线该不该画，是两个不同的判断。
+  bool get hasRouteLine => routeStops.length >= 2;
 
   TripPlan copyWith({
     String? id,

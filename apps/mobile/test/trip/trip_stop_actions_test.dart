@@ -318,6 +318,83 @@ void main() {
     });
   });
 
+  group('添加地点节点', () {
+    test('带坐标快照写入，坐标是地图能定位它的唯一来源', () async {
+      final ctx = build();
+
+      await ctx.actions.addPlace(
+        plan: buildPlan(),
+        tripDayId: 'day-1',
+        dayDate: DateTime(2026, 9, 1),
+        placeId: 'place-1',
+        title: '海鲜面馆',
+        latitude: 38.914003,
+        longitude: 121.614682,
+        hour: 12,
+        minute: 30,
+        duration: const Duration(hours: 1),
+        timeSlot: TripStopType.lunch,
+      );
+
+      final call = ctx.writer.calls.single;
+      expect(call['op'], 'addPlace');
+      expect(call['placeId'], 'place-1');
+      expect(call['title'], '海鲜面馆');
+      // 东京 12:30 即 UTC 03:30：折算按行程时区，不是设备时区。
+      expect(call['startUtc'], '2026-09-01T03:30:00.000Z');
+      expect(call['latitude'], 38.914003);
+      expect(call['longitude'], 121.614682);
+    });
+
+    test('缺坐标的地点也能加入，只是不上地图', () async {
+      // 高德偶有 POI 无坐标。拒绝写入等于因为画不出线就不让用户排这家店。
+      final ctx = build();
+
+      await ctx.actions.addPlace(
+        plan: buildPlan(),
+        tripDayId: 'day-1',
+        dayDate: DateTime(2026, 9, 1),
+        placeId: 'place-2',
+        title: '无坐标小店',
+        hour: 12,
+        minute: 0,
+        duration: const Duration(hours: 1),
+        timeSlot: TripStopType.lunch,
+      );
+
+      final call = ctx.writer.calls.single;
+      expect(call['op'], 'addPlace');
+      expect(call['latitude'], isNull);
+      expect(call['longitude'], isNull);
+    });
+
+    test('撤销删除刚加入的那一项', () async {
+      final ctx = build();
+
+      await ctx.actions.addPlace(
+        plan: buildPlan(),
+        tripDayId: 'day-1',
+        dayDate: DateTime(2026, 9, 1),
+        placeId: 'place-1',
+        title: '海鲜面馆',
+        latitude: 38.914003,
+        longitude: 121.614682,
+        hour: 12,
+        minute: 0,
+        duration: const Duration(hours: 1),
+        timeSlot: TripStopType.lunch,
+      );
+      await pumpEventQueue();
+      final undo = (ctx.outcomes.single as TripActionSucceeded).undo!;
+      ctx.writer.calls.clear();
+
+      await ctx.actions.undo(undo, currentRevision: 6);
+
+      expect(ctx.writer.calls.single['op'], 'delete');
+      expect(ctx.writer.calls.single['tripItemId'], 'created-item');
+    });
+  });
+
   group('时区', () {
     test('无效时区不抛出，转为失败结果', () async {
       // 编排层不应把异常抛给 UI：它已订阅 outcomes，两条错误通道会漏掉一条。
@@ -481,6 +558,34 @@ class _FakeWriter implements TripWriter {
       'title': title,
       'expectedRevision': expectedRevision,
       'startUtc': plannedStartAt.toUtc().toIso8601String(),
+      'notes': notes,
+    }, () => TripWriteResult(id: 'created-item', revision: _revision));
+  }
+
+  @override
+  Future<TripWriteResult> addPlaceItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripDayId,
+    required String placeId,
+    required String title,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    double? latitude,
+    double? longitude,
+    String? notes,
+    String? idempotencyKey,
+  }) {
+    return _record({
+      'op': 'addPlace',
+      'tripDayId': tripDayId,
+      'placeId': placeId,
+      'title': title,
+      'expectedRevision': expectedRevision,
+      'startUtc': plannedStartAt.toUtc().toIso8601String(),
+      'latitude': latitude,
+      'longitude': longitude,
       'notes': notes,
     }, () => TripWriteResult(id: 'created-item', revision: _revision));
   }
