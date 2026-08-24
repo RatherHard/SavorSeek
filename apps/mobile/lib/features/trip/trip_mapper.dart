@@ -16,7 +16,7 @@ abstract final class TripMapper {
     final days = _listOf(row['trip_days'])
         .map((day) => dayFromRow(day, timezone: timezone))
         .toList(growable: false);
-    return TripPlan(
+    final plan = TripPlan(
       id: row['id'] as String,
       title: (row['title'] as String?) ?? '未命名行程',
       destination: destinationOf(days),
@@ -25,6 +25,11 @@ abstract final class TripMapper {
       revision: (row['revision'] as num?)?.toInt() ?? 1,
       days: days,
     );
+    // 地图可用性由数据决定而非另行传入：少于两个可定位节点时没有「路径」可画，
+    // 此时标为不可用，UI 据此显示说明而不是一张只有一个点的地图。
+    return plan.hasRoute
+        ? plan.copyWith(mapState: TripMapState.available)
+        : plan;
   }
 
   static TripDay dayFromRow(
@@ -55,6 +60,7 @@ abstract final class TripMapper {
       _parseTimestamp(row['planned_end_at'])!,
       timezone,
     );
+    final coordinates = coordinatesFrom(row['place_snapshot']);
     return TripStop(
       id: row['id'] as String,
       title: (row['title'] as String?) ?? '未命名地点',
@@ -67,7 +73,30 @@ abstract final class TripMapper {
       isLocked: isLockedFrom(row),
       tripDayId: row['trip_day_id'] as String?,
       status: statusFromWire(row['status'] as String?),
+      latitude: coordinates?.$1,
+      longitude: coordinates?.$2,
     );
+  }
+
+  /// 从 `place_snapshot` 取出经纬度，缺失或不合法时返回 null。
+  ///
+  /// 库端 trigger 已保证「成对出现且在合法范围内」，此处仍逐项校验：快照是
+  /// jsonb，历史数据或未来的写入路径都可能绕过校验，一个越界坐标会让地图把
+  /// 视野拉到世界另一端。返回 (纬度, 经度)。
+  static (double, double)? coordinatesFrom(Object? snapshot) {
+    if (snapshot is! Map) return null;
+    final latitude = _toDouble(snapshot['latitude']);
+    final longitude = _toDouble(snapshot['longitude']);
+    if (latitude == null || longitude == null) return null;
+    if (latitude.abs() > 90 || longitude.abs() > 180) return null;
+    return (latitude, longitude);
+  }
+
+  /// jsonb 的数字可能读回 int 或 double，也可能是字符串，故统一归一化。
+  static double? _toDouble(Object? value) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value);
+    return null;
   }
 
   static TripItemStatus statusFromWire(String? wire) {

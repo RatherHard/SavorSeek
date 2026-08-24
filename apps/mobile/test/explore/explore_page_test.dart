@@ -9,7 +9,9 @@ import 'package:savorseek/features/explore/explore_page.dart';
 void main() {
   group('ExplorePage 布局', () {
     testWidgets('指令栏固定在底部，地图区域占据其余空间', (tester) async {
-      await tester.pumpWidget(const MaterialApp(home: Scaffold(body: ExplorePage())));
+      await tester.pumpWidget(
+        const MaterialApp(home: Scaffold(body: ExplorePage())),
+      );
 
       final screenHeight = tester.getSize(find.byType(ExplorePage)).height;
       final barRect = tester.getRect(find.byType(AgentCommandBar));
@@ -68,9 +70,7 @@ void main() {
       var agreed = false;
       await tester.pumpWidget(
         MaterialApp(
-          home: Scaffold(
-            body: AmapConsentNotice(onAgree: () => agreed = true),
-          ),
+          home: Scaffold(body: AmapConsentNotice(onAgree: () => agreed = true)),
         ),
       );
 
@@ -115,7 +115,10 @@ void main() {
       await tester.pump();
 
       expect(submitted, ['每人 150 元，不去连锁店']);
-      expect(tester.widget<TextField>(find.byType(TextField)).controller?.text, isEmpty);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        isEmpty,
+      );
     });
 
     testWidgets('未接入回调时提交按钮保持禁用', (tester) async {
@@ -127,7 +130,10 @@ void main() {
       await tester.pump();
 
       // Agent 编排未接入，不应给出点了没有反馈的按钮。
-      expect(tester.widget<IconButton>(find.byType(IconButton)).onPressed, isNull);
+      expect(
+        tester.widget<IconButton>(find.byType(IconButton)).onPressed,
+        isNull,
+      );
     });
   });
 }

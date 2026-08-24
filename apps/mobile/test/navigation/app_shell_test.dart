@@ -36,10 +36,12 @@ void main() {
       await tester.pumpWidget(const SavorSeekApp());
 
       final labels = tester
-          .widgetList<Text>(find.descendant(
-            of: find.byType(AppBar),
-            matching: find.byType(Text),
-          ))
+          .widgetList<Text>(
+            find.descendant(
+              of: find.byType(AppBar),
+              matching: find.byType(Text),
+            ),
+          )
           .map((text) => text.data)
           .toList();
 
@@ -95,11 +97,10 @@ void main() {
 
       // 选中态不能只靠颜色传达，必须落到语义树上（NFR-303）。
       SemanticsNode nodeFor(String label) => tester.getSemantics(
-            find.ancestor(
-              of: find.text(label),
-              matching: find.byType(Semantics),
-            ).first,
-          );
+        find
+            .ancestor(of: find.text(label), matching: find.byType(Semantics))
+            .first,
+      );
 
       // 未选中项应为明确的 isFalse 而非 none，否则读屏无法播报「未选中」。
       expect(nodeFor('探索').flagsCollection.isSelected, Tristate.isTrue);

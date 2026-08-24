@@ -96,13 +96,26 @@ void main() {
 
 class _FailingRepository implements TripRepository {
   @override
-  Future<TripPlan?> loadPlan() async => throw Exception('offline');
+  Future<TripPlan?> loadPlan({String? tripId}) async =>
+      throw Exception('offline');
+
+  @override
+  Future<List<TripSummary>> listTrips() async => throw Exception('offline');
 }
 
 class _UnauthenticatedRepository implements TripRepository {
   @override
-  Future<TripPlan?> loadPlan() async => throw const TripRepositoryException(
-    '登录后即可查看属于你的行程。',
-    kind: TripRepositoryErrorKind.unauthenticated,
-  );
+  Future<TripPlan?> loadPlan({String? tripId}) async =>
+      throw const TripRepositoryException(
+        '登录后即可查看属于你的行程。',
+        kind: TripRepositoryErrorKind.unauthenticated,
+      );
+
+  // 控制器先取列表再取详情，故未认证也须在此抛出，否则走不到登录引导分支。
+  @override
+  Future<List<TripSummary>> listTrips() async =>
+      throw const TripRepositoryException(
+        '登录后即可查看属于你的行程。',
+        kind: TripRepositoryErrorKind.unauthenticated,
+      );
 }

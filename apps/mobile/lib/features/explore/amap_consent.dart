@@ -43,8 +43,10 @@ class AmapConsentNotice extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.privacy_tip_outlined,
-                  color: theme.colorScheme.primary),
+              Icon(
+                Icons.privacy_tip_outlined,
+                color: theme.colorScheme.primary,
+              ),
               const SizedBox(height: 16),
               Text('地图服务说明', style: theme.textTheme.titleMedium),
               const SizedBox(height: 8),
@@ -57,10 +59,7 @@ class AmapConsentNotice extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 20),
-              FilledButton(
-                onPressed: onAgree,
-                child: const Text('同意并显示地图'),
-              ),
+              FilledButton(onPressed: onAgree, child: const Text('同意并显示地图')),
             ],
           ),
         ),

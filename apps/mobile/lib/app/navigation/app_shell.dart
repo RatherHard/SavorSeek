@@ -53,10 +53,13 @@ class _AppShellState extends State<AppShell> {
             ExplorePage(
               placeRepository: widget.dependencies.placeRepository,
               scheduler: widget.dependencies.scheduler,
+              consent: widget.dependencies.mapConsent,
             ),
             TripPage(
               repository: widget.dependencies.tripRepository,
               auth: widget.dependencies.auth,
+              mapConsent: widget.dependencies.mapConsent,
+              routeService: widget.dependencies.routeService,
             ),
             MinePage(auth: widget.dependencies.auth),
           ],

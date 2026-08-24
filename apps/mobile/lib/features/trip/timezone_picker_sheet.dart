@@ -29,6 +29,17 @@ const List<({String id, String label})> commonTimezones = [
   (id: 'Australia/Sydney', label: '澳大利亚（悉尼）'),
 ];
 
+/// 时区的中文名。未收录于 [commonTimezones] 时退回 IANA 标识本身。
+///
+/// 与选择器共用同一张表：另建一份映射必然与列表漂移，出现「选了东京、显示
+/// Asia/Tokyo」这类不一致。
+String timezoneLabel(String id) {
+  for (final zone in commonTimezones) {
+    if (zone.id == id) return zone.label;
+  }
+  return id;
+}
+
 /// 弹出时区选择表单，返回所选 IANA 标识。用户取消时返回 null。
 Future<String?> showTimezonePickerSheet(
   BuildContext context, {

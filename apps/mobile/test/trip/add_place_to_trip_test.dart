@@ -34,9 +34,8 @@ void main() {
     });
 
     test('无坐标时不写入经纬度与坐标系', () {
-      final json = buildSnapshot(
-        buildPlace(latitude: null, longitude: null),
-      ).toJson();
+      final json = buildSnapshot(buildPlace(latitude: null, longitude: null))
+          .toJson();
 
       // 「经纬度必须成对出现或同时省略」——只带 coordinate_system 会被拒。
       expect(json.containsKey('latitude'), isFalse);

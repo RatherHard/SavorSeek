@@ -16,9 +16,12 @@ final class TripEmpty extends TripViewState {
 }
 
 final class TripLoaded extends TripViewState {
-  const TripLoaded(this.plan);
+  const TripLoaded(this.plan, {this.trips = const []});
 
   final TripPlan plan;
+
+  /// 用户的全部行程，供切换器展示。只有一个行程时 UI 可据此隐藏切换入口。
+  final List<TripSummary> trips;
 }
 
 final class TripError extends TripViewState {
@@ -40,16 +43,39 @@ class TripController extends ChangeNotifier {
   TripViewState _state = const TripLoading();
   bool _isDisposed = false;
 
+  /// 当前选中的行程 id。为空时 [load] 取最近更新的那一个。
+  String? _selectedTripId;
+
   TripViewState get state => _state;
+
+  /// 当前选中的行程 id，未选中时为 null。
+  String? get selectedTripId => _selectedTripId;
+
+  /// 切换到指定行程并重新加载。
+  Future<void> selectTrip(String tripId) async {
+    if (tripId == _selectedTripId) return;
+    _selectedTripId = tripId;
+    await load();
+  }
 
   Future<void> load() async {
     _setState(const TripLoading());
     try {
-      final plan = await _repository.loadPlan();
+      // 先取列表：选中的行程若已不存在，据此可回退到另一个行程，
+      // 而不是让页面停在「暂无行程」。
+      final trips = await _repository.listTrips();
+      // 选中项失效时回退到默认：删除当前行程后仍指向它会读到空结果，
+      // 表现为「明明还有行程却显示暂无行程」。
+      if (_selectedTripId != null &&
+          !trips.any((trip) => trip.id == _selectedTripId)) {
+        _selectedTripId = null;
+      }
+      final plan = await _repository.loadPlan(tripId: _selectedTripId);
       if (plan == null) {
         _setState(const TripEmpty());
       } else {
-        _setState(TripLoaded(plan));
+        _selectedTripId = plan.id;
+        _setState(TripLoaded(plan, trips: trips));
       }
     } on TripRepositoryException catch (error) {
       _setState(TripError(error.message, kind: error.kind));

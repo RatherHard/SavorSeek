@@ -105,8 +105,9 @@ void main() {
 
     test('缺少 trip_day_id 时不可改期', () {
       final row = tokyoRow();
-      ((row['trip_days'] as List).first as Map)['trip_items'][0]
-          .remove('trip_day_id');
+      ((row['trip_days'] as List).first as Map)['trip_items'][0].remove(
+        'trip_day_id',
+      );
 
       expect(
         TripMapper.planFromRow(row).days.single.stops.single.canReschedule,

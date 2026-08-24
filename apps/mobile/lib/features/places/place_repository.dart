@@ -223,9 +223,10 @@ PlaceSearchException translateFunctionError({
     'provider_unavailable' => PlaceSearchFailure.providerUnavailable,
     'storage_failure' => PlaceSearchFailure.storageFailure,
     // 未知 code 或响应体不合预期：按状态码归类，401 之外一律视为服务端问题。
-    _ => status == 401
-        ? PlaceSearchFailure.unauthenticated
-        : PlaceSearchFailure.storageFailure,
+    _ =>
+      status == 401
+          ? PlaceSearchFailure.unauthenticated
+          : PlaceSearchFailure.storageFailure,
   };
 
   return PlaceSearchException(

@@ -15,10 +15,7 @@ class Place {
     this.address,
     this.latitude,
     this.longitude,
-  }) : assert(
-         (latitude == null) == (longitude == null),
-         '经纬度必须同时提供或同时省略',
-       );
+  }) : assert((latitude == null) == (longitude == null), '经纬度必须同时提供或同时省略');
 
   final String id;
   final String name;

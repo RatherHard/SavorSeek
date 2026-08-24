@@ -87,6 +87,10 @@ void main() {
 
 class _FailingRepository implements TripRepository {
   @override
-  Future<TripPlan?> loadPlan() async =>
+  Future<TripPlan?> loadPlan({String? tripId}) async =>
+      throw const TripRepositoryException('offline');
+
+  @override
+  Future<List<TripSummary>> listTrips() async =>
       throw const TripRepositoryException('offline');
 }

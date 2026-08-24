@@ -18,8 +18,9 @@ abstract final class AmapConfig {
   ///
   /// 正常构建下为空——Android 的 Key 来自 manifest。仅在需要临时覆盖时
   /// 通过 `--dart-define` 传入。
-  static const String _androidKeyOverride =
-      String.fromEnvironment('AMAP_ANDROID_KEY');
+  static const String _androidKeyOverride = String.fromEnvironment(
+    'AMAP_ANDROID_KEY',
+  );
 
   static const String _iosKey = String.fromEnvironment('AMAP_IOS_KEY');
 
