@@ -58,6 +58,23 @@ abstract interface class TripWriter {
     String? idempotencyKey,
   });
 
+  /// 修改行程项的标题与备注。
+  ///
+  /// [notes] 传 null 或空串即清空备注——服务端把 btrim 后的空串归一为 NULL。
+  /// 不支持「传 null 表示不改」：清空与不改都会想用 null 表达，二义性只能靠额外
+  /// 哨兵值解决，而表单本就总是把两个字段一起送。
+  ///
+  /// 已取消的项可编辑（恢复前顺手改备注是合理的）；已完成与已跳过的项不可编辑，
+  /// 服务端返回 22023。
+  Future<TripWriteResult> updateTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    required String title,
+    String? notes,
+    String? idempotencyKey,
+  });
+
   /// 彻底删除行程项。不可恢复，调用方须先向用户确认。
   Future<int> deleteTripItem({
     required String tripId,
@@ -455,6 +472,35 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
       'p_expected_revision': expectedRevision,
       'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
       'p_trip_item_id': tripItemId,
+    });
+    return TripWriteResult(
+      id: (payload['trip_item'] as Map<String, dynamic>)['id'] as String,
+      revision: (payload['revision'] as num).toInt(),
+    );
+  }
+
+  /// 只改标题与备注，不碰时间与状态。
+  ///
+  /// 空标题与超长标题在服务端以 22023 拒绝（而非表约束的 23514），因此这里不做
+  /// 本地长度校验——表单已限长，重复一遍反而多一处需要与库同步的常量。
+  @override
+  Future<TripWriteResult> updateTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    required String title,
+    String? notes,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('update_trip_item', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_trip_item_id': tripItemId,
+      'p_title': title,
+      // 服务端把 btrim 后的空串归一为 NULL，故清空备注传空串即可。
+      'p_notes': notes ?? '',
     });
     return TripWriteResult(
       id: (payload['trip_item'] as Map<String, dynamic>)['id'] as String,

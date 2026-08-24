@@ -11,17 +11,20 @@ final class TripLoading extends TripViewState {
   const TripLoading();
 }
 
-final class TripEmpty extends TripViewState {
-  const TripEmpty();
+/// 目标行程已不存在。
+///
+/// 与「用户没有任何行程」不同，故不复用一个笼统的空态：详情页只服务一个已知
+/// 的 tripId，读不到只可能是它没了——可能是另一台设备删的，也可能列表数据已
+/// 过期。此时显示「暂无行程」是误导，应提示「此行程已不存在」并给出返回列表的
+/// 出口。「你还没有行程」这一情形由列表页的 TripListEmpty 负责。
+final class TripDetailGone extends TripViewState {
+  const TripDetailGone();
 }
 
 final class TripLoaded extends TripViewState {
-  const TripLoaded(this.plan, {this.trips = const []});
+  const TripLoaded(this.plan);
 
   final TripPlan plan;
-
-  /// 用户的全部行程，供切换器展示。只有一个行程时 UI 可据此隐藏切换入口。
-  final List<TripSummary> trips;
 }
 
 final class TripError extends TripViewState {
@@ -36,47 +39,30 @@ final class TripError extends TripViewState {
   final TripRepositoryErrorKind kind;
 }
 
+/// 单个行程的详情控制器（二级页面）。
+///
+/// 只服务构造时传入的那一个行程：行程的选择由一级页面的 TripListController
+/// 负责，因此这里不再持有行程列表，也没有切换能力。少一次 listTrips 请求，
+/// 且「在看哪一个」由导航栈本身表达，无需状态字段。
 class TripController extends ChangeNotifier {
-  TripController(this._repository);
+  TripController(this._repository, {required this.tripId});
 
   final TripRepository _repository;
+
+  /// 本控制器服务的行程 id，构造后不变。
+  final String tripId;
+
   TripViewState _state = const TripLoading();
   bool _isDisposed = false;
 
-  /// 当前选中的行程 id。为空时 [load] 取最近更新的那一个。
-  String? _selectedTripId;
-
   TripViewState get state => _state;
-
-  /// 当前选中的行程 id，未选中时为 null。
-  String? get selectedTripId => _selectedTripId;
-
-  /// 切换到指定行程并重新加载。
-  Future<void> selectTrip(String tripId) async {
-    if (tripId == _selectedTripId) return;
-    _selectedTripId = tripId;
-    await load();
-  }
 
   Future<void> load() async {
     _setState(const TripLoading());
     try {
-      // 先取列表：选中的行程若已不存在，据此可回退到另一个行程，
-      // 而不是让页面停在「暂无行程」。
-      final trips = await _repository.listTrips();
-      // 选中项失效时回退到默认：删除当前行程后仍指向它会读到空结果，
-      // 表现为「明明还有行程却显示暂无行程」。
-      if (_selectedTripId != null &&
-          !trips.any((trip) => trip.id == _selectedTripId)) {
-        _selectedTripId = null;
-      }
-      final plan = await _repository.loadPlan(tripId: _selectedTripId);
-      if (plan == null) {
-        _setState(const TripEmpty());
-      } else {
-        _selectedTripId = plan.id;
-        _setState(TripLoaded(plan, trips: trips));
-      }
+      final plan = await _repository.loadPlan(tripId: tripId);
+      // null 意味着这个行程没了，而不是用户没有行程——详情页据此提示并给出返回出口。
+      _setState(plan == null ? const TripDetailGone() : TripLoaded(plan));
     } on TripRepositoryException catch (error) {
       _setState(TripError(error.message, kind: error.kind));
     } on Exception {

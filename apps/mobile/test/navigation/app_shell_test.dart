@@ -13,7 +13,7 @@ import 'package:savorseek/features/explore/agent_command_bar.dart';
 import 'package:savorseek/features/explore/explore_page.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 import 'package:savorseek/features/mine/mine_page.dart';
-import 'package:savorseek/features/trip/trip_page.dart';
+import 'package:savorseek/features/trip/trip_list_page.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
 
 /// 后端未配置形态：与 SavorSeekApp 缺省依赖一致，使断言不依赖真实网络。
@@ -74,7 +74,7 @@ void main() {
 
       // IndexedStack 保留全部页面，使地图视野与滚动位置在切页后不重置。
       expect(find.byType(ExplorePage, skipOffstage: false), findsOneWidget);
-      expect(find.byType(TripPage, skipOffstage: false), findsOneWidget);
+      expect(find.byType(TripListPage, skipOffstage: false), findsOneWidget);
       expect(find.byType(MinePage, skipOffstage: false), findsOneWidget);
     });
 

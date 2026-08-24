@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:savorseek/features/trip/trip_mapper.dart';
-import 'package:savorseek/features/trip/trip_page.dart';
+import 'package:savorseek/features/trip/trip_detail_page.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
 import 'package:savorseek/features/trip/trip_time_zone.dart';
 
@@ -16,7 +16,7 @@ void main() {
   setUpAll(TripTimeZone.ensureInitialized);
 
   Widget wrap(FakeWritableRepository repository) => MaterialApp(
-    home: Scaffold(body: TripPage(repository: repository)),
+    home: TripDetailPage(repository: repository, tripId: 'trip-1'),
   );
 
   FakeWritableRepository buildRepository() {

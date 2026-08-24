@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:savorseek/features/trip/timezone_picker_sheet.dart';
 import 'package:savorseek/features/trip/trip_mapper.dart';
 import 'package:savorseek/features/trip/trip_models.dart';
-import 'package:savorseek/features/trip/trip_page.dart';
+import 'package:savorseek/features/trip/trip_detail_page.dart';
 import 'package:savorseek/features/trip/trip_time_zone.dart';
 
 import 'trip_reschedule_test.dart' show FakeWritableRepository;
@@ -48,7 +48,7 @@ TripPlan buildPlan({String timezone = 'Asia/Shanghai'}) =>
     });
 
 Widget wrap(FakeWritableRepository repository) => MaterialApp(
-  home: Scaffold(body: TripPage(repository: repository)),
+  home: TripDetailPage(repository: repository, tripId: 'trip-1'),
 );
 
 /// 打开第 [index] 个行程项的菜单。

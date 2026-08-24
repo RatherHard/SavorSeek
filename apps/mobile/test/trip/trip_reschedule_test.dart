@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savorseek/features/trip/trip_mapper.dart';
 import 'package:savorseek/features/trip/trip_models.dart';
-import 'package:savorseek/features/trip/trip_page.dart';
+import 'package:savorseek/features/trip/trip_detail_page.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
 import 'package:savorseek/features/trip/trip_time_zone.dart';
 
@@ -99,6 +99,43 @@ class FakeWritableRepository implements TripRepository, TripWriter {
     final failure = error;
     if (failure != null) throw failure;
     _plan = _plan.copyWith(revision: _plan.revision + 1);
+    return TripWriteResult(id: tripItemId, revision: _plan.revision);
+  }
+
+  @override
+  Future<TripWriteResult> updateTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    required String title,
+    String? notes,
+    String? idempotencyKey,
+  }) async {
+    calls.add({
+      'op': 'updateItem',
+      'tripItemId': tripItemId,
+      'title': title,
+      'notes': notes,
+      'expectedRevision': expectedRevision,
+    });
+    final failure = error;
+    if (failure != null) throw failure;
+    // 标题与备注写回当前 plan，便于断言重载后的呈现。
+    _plan = _plan.copyWith(
+      revision: _plan.revision + 1,
+      days: [
+        for (final day in _plan.days)
+          day.copyWith(
+            stops: [
+              for (final stop in day.stops)
+                if (stop.id == tripItemId)
+                  stop.copyWith(title: title, note: notes)
+                else
+                  stop,
+            ],
+          ),
+      ],
+    );
     return TripWriteResult(id: tripItemId, revision: _plan.revision);
   }
 
@@ -266,9 +303,10 @@ TripPlan buildTokyoPlan() => TripMapper.planFromRow({
   ],
 });
 
-Widget wrap(TripRepository repository) => MaterialApp(
-  home: Scaffold(body: TripPage(repository: repository)),
-);
+Widget wrap(TripRepository repository, {String tripId = 'trip-tokyo'}) =>
+    MaterialApp(
+      home: TripDetailPage(repository: repository, tripId: tripId),
+    );
 
 void main() {
   setUpAll(TripTimeZone.ensureInitialized);
@@ -393,7 +431,9 @@ void main() {
       ],
     });
 
-    await tester.pumpWidget(wrap(FakeWritableRepository(plan)));
+    await tester.pumpWidget(
+      wrap(FakeWritableRepository(plan), tripId: 'trip-1'),
+    );
     await tester.pumpAndSettle();
 
     // 给已完成的到访改时间会让历史失真，库端也会拒绝。
