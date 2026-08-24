@@ -93,9 +93,8 @@ class _AuthSheetState extends State<AuthSheet> {
             const SizedBox(height: AppTokens.spaceXs),
             Text(
               '行程数据按账号隔离，登录后才能看到属于你的安排。',
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: AppTokens.spaceLg),
             TextFormField(
@@ -125,9 +124,8 @@ class _AuthSheetState extends State<AuthSheet> {
               const SizedBox(height: AppTokens.spaceMd),
               Text(
                 message,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: scheme.error),
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: scheme.error),
               ),
             ],
             const SizedBox(height: AppTokens.spaceLg),

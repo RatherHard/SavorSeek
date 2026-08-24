@@ -157,10 +157,7 @@ class _DetailRow extends StatelessWidget {
         Icon(icon, size: 18, color: color),
         const SizedBox(width: AppTokens.spaceSm),
         Expanded(
-          child: Text(
-            text,
-            style: style?.copyWith(color: color, height: 1.4),
-          ),
+          child: Text(text, style: style?.copyWith(color: color, height: 1.4)),
         ),
       ],
     );

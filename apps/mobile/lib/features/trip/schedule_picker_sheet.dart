@@ -273,11 +273,7 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
               const SizedBox(height: AppTokens.spaceSm),
               Row(
                 children: [
-                  Icon(
-                    Icons.public,
-                    size: 16,
-                    color: scheme.onSurfaceVariant,
-                  ),
+                  Icon(Icons.public, size: 16, color: scheme.onSurfaceVariant),
                   const SizedBox(width: AppTokens.spaceXs),
                   Expanded(
                     child: Text(

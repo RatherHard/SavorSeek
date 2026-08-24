@@ -13,7 +13,7 @@ import 'package:savorseek/features/explore/agent_command_bar.dart';
 import 'package:savorseek/features/explore/explore_page.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 import 'package:savorseek/features/mine/mine_page.dart';
-import 'package:savorseek/features/trip/trip_page.dart';
+import 'package:savorseek/features/trip/trip_list_page.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
 
 /// 后端未配置形态：与 SavorSeekApp 缺省依赖一致，使断言不依赖真实网络。
@@ -36,10 +36,12 @@ void main() {
       await tester.pumpWidget(const SavorSeekApp());
 
       final labels = tester
-          .widgetList<Text>(find.descendant(
-            of: find.byType(AppBar),
-            matching: find.byType(Text),
-          ))
+          .widgetList<Text>(
+            find.descendant(
+              of: find.byType(AppBar),
+              matching: find.byType(Text),
+            ),
+          )
           .map((text) => text.data)
           .toList();
 
@@ -72,7 +74,7 @@ void main() {
 
       // IndexedStack 保留全部页面，使地图视野与滚动位置在切页后不重置。
       expect(find.byType(ExplorePage, skipOffstage: false), findsOneWidget);
-      expect(find.byType(TripPage, skipOffstage: false), findsOneWidget);
+      expect(find.byType(TripListPage, skipOffstage: false), findsOneWidget);
       expect(find.byType(MinePage, skipOffstage: false), findsOneWidget);
     });
 
@@ -95,11 +97,10 @@ void main() {
 
       // 选中态不能只靠颜色传达，必须落到语义树上（NFR-303）。
       SemanticsNode nodeFor(String label) => tester.getSemantics(
-            find.ancestor(
-              of: find.text(label),
-              matching: find.byType(Semantics),
-            ).first,
-          );
+        find
+            .ancestor(of: find.text(label), matching: find.byType(Semantics))
+            .first,
+      );
 
       // 未选中项应为明确的 isFalse 而非 none，否则读屏无法播报「未选中」。
       expect(nodeFor('探索').flagsCollection.isSelected, Tristate.isTrue);

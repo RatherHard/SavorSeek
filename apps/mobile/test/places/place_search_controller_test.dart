@@ -82,7 +82,10 @@ void main() {
 
   test('有结果时进入 loaded 并保留顺序', () async {
     repository.result = PlaceSearchResult(
-      places: [buildPlace(id: 'a'), buildPlace(id: 'b', name: '渔家菜')],
+      places: [
+        buildPlace(id: 'a'),
+        buildPlace(id: 'b', name: '渔家菜'),
+      ],
       fromCache: true,
       fetchedAt: DateTime(2026, 8, 23, 12),
     );

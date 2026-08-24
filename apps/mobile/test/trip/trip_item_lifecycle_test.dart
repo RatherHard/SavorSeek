@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:savorseek/features/trip/timezone_picker_sheet.dart';
 import 'package:savorseek/features/trip/trip_mapper.dart';
 import 'package:savorseek/features/trip/trip_models.dart';
-import 'package:savorseek/features/trip/trip_page.dart';
+import 'package:savorseek/features/trip/trip_detail_page.dart';
 import 'package:savorseek/features/trip/trip_time_zone.dart';
 
 import 'trip_reschedule_test.dart' show FakeWritableRepository;
@@ -47,12 +47,23 @@ TripPlan buildPlan({String timezone = 'Asia/Shanghai'}) =>
       ],
     });
 
-Widget wrap(FakeWritableRepository repository) =>
-    MaterialApp(home: Scaffold(body: TripPage(repository: repository)));
+Widget wrap(FakeWritableRepository repository) => MaterialApp(
+  home: TripDetailPage(repository: repository, tripId: 'trip-1'),
+);
 
 /// 打开第 [index] 个行程项的菜单。
 Future<void> openMenu(WidgetTester tester, int index) async {
   await tester.tap(find.byIcon(Icons.more_vert).at(index));
+  await tester.pumpAndSettle();
+}
+
+/// 打开行程级操作菜单并选择「更改行程时区」。
+///
+/// 行程级操作聚合在一个菜单里，时区入口因此是两步：先展开菜单再点条目。
+Future<void> openTimezonePicker(WidgetTester tester) async {
+  await tester.tap(find.byTooltip('行程操作'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('更改行程时区'));
   await tester.pumpAndSettle();
 }
 
@@ -104,7 +115,8 @@ void main() {
       expect(repository.calls, hasLength(1));
       expect(repository.calls.single['op'], 'cancel');
       expect(repository.calls.single['tripItemId'], 'item-planned');
-      expect(find.textContaining('可在行程中恢复'), findsOneWidget);
+      // 提示条上直接给「撤销」，不再让用户回列表里自己找那一项选恢复。
+      expect(find.widgetWithText(SnackBarAction, '撤销'), findsOneWidget);
     });
 
     testWidgets('恢复调用 restoreTripItem', (tester) async {
@@ -191,8 +203,7 @@ void main() {
       await tester.pumpWidget(wrap(repository));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byTooltip('更改行程时区'));
-      await tester.pumpAndSettle();
+      await openTimezonePicker(tester);
       expect(find.text('选择行程时区'), findsOneWidget);
       // 语义必须讲清楚，否则用户不知道时间会不会跟着变。
       expect(find.textContaining('保留当地钟点'), findsOneWidget);
@@ -208,8 +219,7 @@ void main() {
       final repository = FakeWritableRepository(buildPlan());
       await tester.pumpWidget(wrap(repository));
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('更改行程时区'));
-      await tester.pumpAndSettle();
+      await openTimezonePicker(tester);
 
       final tile = tester.widget<ListTile>(
         find.widgetWithText(ListTile, '中国大陆（北京时间）'),
@@ -222,8 +232,7 @@ void main() {
       final repository = FakeWritableRepository(buildPlan());
       await tester.pumpWidget(wrap(repository));
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('更改行程时区'));
-      await tester.pumpAndSettle();
+      await openTimezonePicker(tester);
       await tester.tap(find.widgetWithText(OutlinedButton, '取消'));
       await tester.pumpAndSettle();
 

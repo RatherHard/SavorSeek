@@ -152,7 +152,10 @@ void main() {
     });
 
     test('时钟偏差导致的未来时间不显示负数', () {
-      expect(formatFreshness(now.add(const Duration(hours: 2)), now: now), '刚刚');
+      expect(
+        formatFreshness(now.add(const Duration(hours: 2)), now: now),
+        '刚刚',
+      );
     });
   });
 }

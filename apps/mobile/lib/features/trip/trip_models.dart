@@ -60,7 +60,9 @@ class TripStop {
     this.isLocked = false,
     this.tripDayId,
     this.status = TripItemStatus.planned,
-  });
+    this.latitude,
+    this.longitude,
+  }) : assert((latitude == null) == (longitude == null), '经纬度必须同时提供或同时省略');
 
   final String id;
   final String title;
@@ -90,6 +92,16 @@ class TripStop {
   /// 项的状态。终态项不可改期（库端亦会拒绝）。
   final TripItemStatus status;
 
+  /// 地点坐标，取自 `trip_items.place_snapshot`。
+  ///
+  /// 坐标系恒为 gcj02（与高德底图一致，无需转换）。休息项与快照缺经纬度的地点项
+  /// 为空，此时该节点不参与路线绘制。
+  final double? latitude;
+  final double? longitude;
+
+  /// 是否可在地图上定位。
+  bool get hasCoordinates => latitude != null && longitude != null;
+
   /// 是否可改期。
   ///
   /// 终态项改期没有意义且会让历史失真；缺少 tripDayId 时无法构造写入请求。
@@ -108,6 +120,8 @@ class TripStop {
     bool? isLocked,
     String? tripDayId,
     TripItemStatus? status,
+    double? latitude,
+    double? longitude,
   }) {
     return TripStop(
       id: id ?? this.id,
@@ -121,6 +135,8 @@ class TripStop {
       isLocked: isLocked ?? this.isLocked,
       tripDayId: tripDayId ?? this.tripDayId,
       status: status ?? this.status,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
     );
   }
 }
@@ -186,6 +202,22 @@ class TripPlan {
   final int revision;
 
   int get stopCount => days.fold(0, (count, day) => count + day.stops.length);
+
+  /// 按时间顺序排列的、可在地图上定位的节点。
+  ///
+  /// 已取消的项排除在外：它们不在计划路线上，画进去会让路线绕行到一个用户已经
+  /// 决定不去的点。跨天的节点连成一条线——行程本身就是按天顺序推进的。
+  List<TripStop> get routeStops {
+    return [
+      for (final day in days)
+        for (final stop in day.stops)
+          if (stop.hasCoordinates && stop.status != TripItemStatus.cancelled)
+            stop,
+    ];
+  }
+
+  /// 地图能否绘制路线。至少要两个可定位节点才谈得上「路径」。
+  bool get hasRoute => routeStops.length >= 2;
 
   TripPlan copyWith({
     String? id,

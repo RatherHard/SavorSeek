@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import 'package:savorseek/app/theme/design_tokens.dart';
 
+import 'timezone_picker_sheet.dart';
+
 /// 创建行程表单的提交结果。
 @immutable
 class CreateTripDraft {
@@ -11,6 +13,7 @@ class CreateTripDraft {
     required this.endDate,
     required this.partySize,
     this.budgetLimitMinor,
+    this.timezone = 'Asia/Shanghai',
   });
 
   final String title;
@@ -23,6 +26,12 @@ class CreateTripDraft {
   /// 用整数分而非浮点元：金额用 double 会在累加时产生误差，库中
   /// `budget_limit_minor` 亦为 bigint。
   final int? budgetLimitMinor;
+
+  /// 行程时区（IANA 标识）。
+  ///
+  /// 在创建时就确定：`validate_trip_row` 规定一旦存在 trip_days 就不得再改时区
+  /// （仅受控迁移事务例外），创建后再改要绕 change_trip_timezone 一圈。
+  final String timezone;
 }
 
 /// 弹出创建行程表单。用户取消时返回 null。
@@ -57,6 +66,9 @@ class _CreateTripSheetState extends State<_CreateTripSheet> {
   late DateTime _endDate;
   int _partySize = 2;
 
+  /// 行程时区，默认与库端默认值一致。
+  String _timezone = 'Asia/Shanghai';
+
   @override
   void initState() {
     super.initState();
@@ -90,6 +102,12 @@ class _CreateTripSheetState extends State<_CreateTripSheet> {
     });
   }
 
+  Future<void> _pickTimezone() async {
+    final picked = await showTimezonePickerSheet(context, current: _timezone);
+    if (picked == null || !mounted) return;
+    setState(() => _timezone = picked);
+  }
+
   void _submit() {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
@@ -106,6 +124,7 @@ class _CreateTripSheetState extends State<_CreateTripSheet> {
         budgetLimitMinor: budgetYuan == null
             ? null
             : (budgetYuan * 100).round(),
+        timezone: _timezone,
       ),
     );
   }
@@ -152,6 +171,12 @@ class _CreateTripSheetState extends State<_CreateTripSheet> {
                   label: '日期',
                   value: formatTripRange(_startDate, _endDate),
                   onTap: _pickDateRange,
+                ),
+                _FieldTile(
+                  icon: Icons.public,
+                  label: '时区',
+                  value: timezoneLabel(_timezone),
+                  onTap: _pickTimezone,
                 ),
                 const SizedBox(height: AppTokens.spaceMd),
                 Row(

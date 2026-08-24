@@ -38,6 +38,29 @@ void main() {
       // 默认人数 2，未填预算时为 null。
       expect(draft!.partySize, 2);
       expect(draft!.budgetLimitMinor, isNull);
+      // 未改动时区时用库端默认值。
+      expect(draft!.timezone, 'Asia/Shanghai');
+    });
+
+    testWidgets('可在创建时选择时区', (tester) async {
+      // 此前时区固定为 Asia/Shanghai，跨时区行程只能先创建再改（见 待办.md）。
+      CreateTripDraft? draft;
+      await tester.pumpWidget(wrap((value) => draft = value));
+      await openSheet(tester);
+
+      await tester.enterText(find.byType(TextFormField).first, '东京五日');
+      // 默认显示中文名而非 IANA 标识。
+      expect(find.text('中国大陆（北京时间）'), findsOneWidget);
+
+      await tester.tap(find.text('中国大陆（北京时间）'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('日本（东京）'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('创建行程'));
+      await tester.pumpAndSettle();
+
+      expect(draft!.timezone, 'Asia/Tokyo');
     });
 
     testWidgets('标题为空白时拦在本地，不回传草稿', (tester) async {

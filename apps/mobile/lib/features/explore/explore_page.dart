@@ -23,13 +23,24 @@ import 'package:savorseek/features/trip/schedule_picker_sheet.dart';
 /// 让「下达指令 → 地图上看到结果」这条路径可用。接入真实编排后，这里改为提交
 /// 结构化指令，检索由 Agent 的 `search_places` 工具发起。
 class ExplorePage extends StatefulWidget {
-  const ExplorePage({super.key, this.placeRepository, this.scheduler});
+  const ExplorePage({
+    super.key,
+    this.placeRepository,
+    this.scheduler,
+    this.consent,
+  });
 
   /// 地点检索仓库。为空时检索入口禁用（未注入后端依赖的场景）。
   final PlaceRepository? placeRepository;
 
   /// 加入行程的能力。为空时详情面板的按钮禁用。
   final PlaceScheduler? scheduler;
+
+  /// 高德合规同意状态。
+  ///
+  /// 由外部注入时与行程页共享同一实例：同意与否是同一个事实，留在页面内会让
+  /// 用户在两处各同意一次。为空时本页自建（测试与未注入依赖的场景）。
+  final AmapConsent? consent;
 
   @override
   State<ExplorePage> createState() => _ExplorePageState();
@@ -39,7 +50,15 @@ class _ExplorePageState extends State<ExplorePage> {
   /// 默认检索城市。定位能力接入前的回退值，与地图默认视野保持一致。
   static const String _defaultCity = '大连';
 
-  final AmapConsent _consent = AmapConsent();
+  /// 合规同意状态。注入时与行程页共享，否则本页自持。
+  late final AmapConsent _consent = widget.consent ?? AmapConsent();
+
+  /// 是否由本页创建 [_consent]，决定 dispose 时是否释放。
+  ///
+  /// 注入的实例由 AppDependencies 持有并被行程页共用，本页释放会让另一页
+  /// 监听一个已销毁的 notifier。
+  bool get _ownsConsent => widget.consent == null;
+
   PlaceSearchController? _search;
 
   /// marker id 到地点的映射。
@@ -71,7 +90,7 @@ class _ExplorePageState extends State<ExplorePage> {
   @override
   void dispose() {
     _consent.removeListener(_onConsentChanged);
-    _consent.dispose();
+    if (_ownsConsent) _consent.dispose();
     _search?.removeListener(_onSearchChanged);
     _search?.dispose();
     super.dispose();
@@ -126,9 +145,8 @@ class _ExplorePageState extends State<ExplorePage> {
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.maybeOf(
-      context,
-    )?.showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -185,9 +203,7 @@ class _ExplorePageState extends State<ExplorePage> {
           child: PlaceDetailSheet(
             place: selected,
             onClose: search.clearSelection,
-            onAddToTrip: widget.scheduler == null
-                ? null
-                : _addSelectedToTrip,
+            onAddToTrip: widget.scheduler == null ? null : _addSelectedToTrip,
             isAdding: _isAddingToTrip,
           ),
         ),

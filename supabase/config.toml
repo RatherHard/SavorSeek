@@ -37,3 +37,10 @@ entrypoint = "./functions/agent/index.ts"
 enabled = true
 verify_jwt = true
 entrypoint = "./functions/places-search/index.ts"
+
+# 同上：trip-route 亦在函数代码内用 auth.getUser() 自行校验，避免持有 anon key
+# 即可免登录消耗高德配额。
+[functions.trip-route]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/trip-route/index.ts"

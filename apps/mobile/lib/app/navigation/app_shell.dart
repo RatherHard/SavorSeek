@@ -6,7 +6,7 @@ import 'package:savorseek/app/navigation/primary_nav_bar.dart';
 import 'package:savorseek/app/theme/design_tokens.dart';
 import 'package:savorseek/features/explore/explore_page.dart';
 import 'package:savorseek/features/mine/mine_page.dart';
-import 'package:savorseek/features/trip/trip_page.dart';
+import 'package:savorseek/features/trip/trip_list_page.dart';
 
 /// 应用外壳：承载顶部主导航与三个主页面。
 ///
@@ -53,10 +53,13 @@ class _AppShellState extends State<AppShell> {
             ExplorePage(
               placeRepository: widget.dependencies.placeRepository,
               scheduler: widget.dependencies.scheduler,
+              consent: widget.dependencies.mapConsent,
             ),
-            TripPage(
+            TripListPage(
               repository: widget.dependencies.tripRepository,
               auth: widget.dependencies.auth,
+              mapConsent: widget.dependencies.mapConsent,
+              routeService: widget.dependencies.routeService,
             ),
             MinePage(auth: widget.dependencies.auth),
           ],

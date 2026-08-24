@@ -2,20 +2,51 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:savorseek/features/trip/trip_mapper.dart';
 import 'package:savorseek/features/trip/trip_models.dart';
-import 'package:savorseek/features/trip/trip_page.dart';
+import 'package:savorseek/features/trip/trip_detail_page.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
 import 'package:savorseek/features/trip/trip_time_zone.dart';
 
 /// 记录改期调用的仓库。同时实现读与写，模拟真实仓库的能力组合。
 class FakeWritableRepository implements TripRepository, TripWriter {
-  FakeWritableRepository(this._plan);
+  FakeWritableRepository(this._plan, {List<TripPlan>? others})
+    : _others = others ?? const [];
 
   TripPlan _plan;
+
+  /// 除当前行程外的其他行程，用于覆盖切换分支。
+  final List<TripPlan> _others;
+
   final List<Map<String, Object?>> calls = [];
   TripRepositoryException? error;
 
   @override
-  Future<TripPlan?> loadPlan() async => _plan;
+  Future<TripPlan?> loadPlan({String? tripId}) async {
+    if (tripId == null || tripId == _plan.id) return _plan;
+    for (final plan in _others) {
+      if (plan.id == tripId) {
+        // 切换后当前行程随之改变，与真实仓库「读到的就是选中的那个」一致。
+        _plan = plan;
+        return plan;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Future<List<TripSummary>> listTrips() async {
+    TripSummary summarize(TripPlan plan) => TripSummary(
+      id: plan.id,
+      title: plan.title,
+      startDate: plan.days.first.date,
+      endDate: plan.days.last.date,
+      timezone: plan.timezone,
+    );
+    return [
+      summarize(_plan),
+      for (final plan in _others)
+        if (plan.id != _plan.id) summarize(plan),
+    ];
+  }
 
   @override
   Future<TripWriteResult> rescheduleTripItem({
@@ -72,6 +103,43 @@ class FakeWritableRepository implements TripRepository, TripWriter {
   }
 
   @override
+  Future<TripWriteResult> updateTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    required String title,
+    String? notes,
+    String? idempotencyKey,
+  }) async {
+    calls.add({
+      'op': 'updateItem',
+      'tripItemId': tripItemId,
+      'title': title,
+      'notes': notes,
+      'expectedRevision': expectedRevision,
+    });
+    final failure = error;
+    if (failure != null) throw failure;
+    // 标题与备注写回当前 plan，便于断言重载后的呈现。
+    _plan = _plan.copyWith(
+      revision: _plan.revision + 1,
+      days: [
+        for (final day in _plan.days)
+          day.copyWith(
+            stops: [
+              for (final stop in day.stops)
+                if (stop.id == tripItemId)
+                  stop.copyWith(title: title, note: notes)
+                else
+                  stop,
+            ],
+          ),
+      ],
+    );
+    return TripWriteResult(id: tripItemId, revision: _plan.revision);
+  }
+
+  @override
   Future<int> deleteTripItem({
     required String tripId,
     required int expectedRevision,
@@ -98,6 +166,91 @@ class FakeWritableRepository implements TripRepository, TripWriter {
     _plan = _plan.copyWith(timezone: timezone, revision: _plan.revision + 1);
     return _plan.days.fold<int>(0, (sum, day) => sum + day.stops.length);
   }
+
+  @override
+  Future<TripWriteResult> addBreakItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripDayId,
+    required String title,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    String? notes,
+    String? idempotencyKey,
+  }) async {
+    calls.add({
+      'op': 'addBreak',
+      'tripDayId': tripDayId,
+      'title': title,
+      'startUtc': plannedStartAt.toUtc().toIso8601String(),
+      'endUtc': plannedEndAt.toUtc().toIso8601String(),
+      'timeSlot': timeSlot.wireName,
+      'notes': notes,
+    });
+    final failure = error;
+    if (failure != null) throw failure;
+    _plan = _plan.copyWith(revision: _plan.revision + 1);
+    return TripWriteResult(id: 'new-item', revision: _plan.revision);
+  }
+
+  @override
+  Future<int> countItemsOnDay(String tripDayId) async {
+    for (final day in _plan.days) {
+      if (day.id == tripDayId) {
+        return day.stops
+            .where((stop) => stop.status != TripItemStatus.cancelled)
+            .length;
+      }
+    }
+    return 0;
+  }
+
+  @override
+  Future<TripBatchResult> batchCancelTripItems({
+    required String tripId,
+    required int expectedRevision,
+    required List<String> tripItemIds,
+    String? idempotencyKey,
+  }) async {
+    calls.add({
+      'op': 'batchCancel',
+      'ids': tripItemIds.join(','),
+      'expectedRevision': expectedRevision,
+    });
+    final failure = error;
+    if (failure != null) throw failure;
+    // 批量只递增一次，与库端一致。
+    _plan = _plan.copyWith(revision: _plan.revision + 1);
+    return TripBatchResult(
+      affectedCount: tripItemIds.length,
+      revision: _plan.revision,
+    );
+  }
+
+  @override
+  Future<TripBatchResult> batchDeleteTripItems({
+    required String tripId,
+    required int expectedRevision,
+    required List<String> tripItemIds,
+    String? idempotencyKey,
+  }) async {
+    calls.add({
+      'op': 'batchDelete',
+      'ids': tripItemIds.join(','),
+      'expectedRevision': expectedRevision,
+    });
+    final failure = error;
+    if (failure != null) throw failure;
+    _plan = _plan.copyWith(revision: _plan.revision + 1);
+    return TripBatchResult(
+      affectedCount: tripItemIds.length,
+      revision: _plan.revision,
+    );
+  }
+
+  /// 当前行程，供测试断言写入后的状态。
+  TripPlan get plan => _plan;
 }
 
 /// 只读仓库，用于验证无写入能力时不给出改期入口。
@@ -107,7 +260,18 @@ class ReadOnlyRepository implements TripRepository {
   final TripPlan plan;
 
   @override
-  Future<TripPlan?> loadPlan() async => plan;
+  Future<TripPlan?> loadPlan({String? tripId}) async => plan;
+
+  @override
+  Future<List<TripSummary>> listTrips() async => [
+    TripSummary(
+      id: plan.id,
+      title: plan.title,
+      startDate: plan.days.first.date,
+      endDate: plan.days.last.date,
+      timezone: plan.timezone,
+    ),
+  ];
 }
 
 /// 两日东京行程，首日 19:00 有一项。
@@ -139,8 +303,10 @@ TripPlan buildTokyoPlan() => TripMapper.planFromRow({
   ],
 });
 
-Widget wrap(TripRepository repository) =>
-    MaterialApp(home: Scaffold(body: TripPage(repository: repository)));
+Widget wrap(TripRepository repository, {String tripId = 'trip-tokyo'}) =>
+    MaterialApp(
+      home: TripDetailPage(repository: repository, tripId: tripId),
+    );
 
 void main() {
   setUpAll(TripTimeZone.ensureInitialized);
@@ -265,7 +431,9 @@ void main() {
       ],
     });
 
-    await tester.pumpWidget(wrap(FakeWritableRepository(plan)));
+    await tester.pumpWidget(
+      wrap(FakeWritableRepository(plan), tripId: 'trip-1'),
+    );
     await tester.pumpAndSettle();
 
     // 给已完成的到访改时间会让历史失真，库端也会拒绝。

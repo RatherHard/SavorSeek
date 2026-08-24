@@ -100,9 +100,8 @@ abstract final class TripTimeZone {
   /// （DateTime 的子类），其 `toLocal()` 仍走时区库而非设备时区，偏移恒为 0，
   /// 会让同时区行程被误判为有时差。故显式构造一个普通 DateTime 再取偏移。
   static Duration deviceOffsetAt(DateTime instant) {
-    return DateTime.fromMillisecondsSinceEpoch(
-      instant.millisecondsSinceEpoch,
-    ).timeZoneOffset;
+    return DateTime.fromMillisecondsSinceEpoch(instant.millisecondsSinceEpoch)
+        .timeZoneOffset;
   }
 
   /// 时差的可读表述，如 `+1 小时`、`-3 小时`、`+1 小时 30 分`。

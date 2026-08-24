@@ -22,7 +22,7 @@ trip_days(
   trip_items(
     id, trip_day_id, item_type, place_id, title, planned_start_at,
     planned_end_at, time_slot, position, notes, status,
-    is_place_locked, is_time_locked, is_order_locked
+    is_place_locked, is_time_locked, is_order_locked, place_snapshot
   )
 )''';
 
@@ -58,6 +58,23 @@ abstract interface class TripWriter {
     String? idempotencyKey,
   });
 
+  /// 修改行程项的标题与备注。
+  ///
+  /// [notes] 传 null 或空串即清空备注——服务端把 btrim 后的空串归一为 NULL。
+  /// 不支持「传 null 表示不改」：清空与不改都会想用 null 表达，二义性只能靠额外
+  /// 哨兵值解决，而表单本就总是把两个字段一起送。
+  ///
+  /// 已取消的项可编辑（恢复前顺手改备注是合理的）；已完成与已跳过的项不可编辑，
+  /// 服务端返回 22023。
+  Future<TripWriteResult> updateTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    required String title,
+    String? notes,
+    String? idempotencyKey,
+  });
+
   /// 彻底删除行程项。不可恢复，调用方须先向用户确认。
   Future<int> deleteTripItem({
     required String tripId,
@@ -73,10 +90,105 @@ abstract interface class TripWriter {
     required String timezone,
     String? idempotencyKey,
   });
+
+  /// 添加一个自由安排节点（`break`）。
+  ///
+  /// 只暴露 `break` 这一种：地点项必须携带 placeId 与快照（库端 trigger 强制），
+  /// 而行程页没有地点检索能力，地点节点仍从探索页加入。
+  Future<TripWriteResult> addBreakItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripDayId,
+    required String title,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    String? notes,
+    String? idempotencyKey,
+  });
+
+  /// 统计某一天已有的非取消项数，用于推导新节点的 position。
+  Future<int> countItemsOnDay(String tripDayId);
+
+  /// 批量取消（软删除）。整批原子：任一项不合法则全部不生效。
+  ///
+  /// 单独的 RPC 而非循环调用单项版本：每次单项写入都会递增 revision，循环到
+  /// 第二次时 expected_revision 已过期，必然收到 P0002。
+  Future<TripBatchResult> batchCancelTripItems({
+    required String tripId,
+    required int expectedRevision,
+    required List<String> tripItemIds,
+    String? idempotencyKey,
+  });
+
+  /// 批量硬删除。不可恢复，调用方须先向用户确认。
+  Future<TripBatchResult> batchDeleteTripItems({
+    required String tripId,
+    required int expectedRevision,
+    required List<String> tripItemIds,
+    String? idempotencyKey,
+  });
+}
+
+/// 批量写入的结果。
+@immutable
+class TripBatchResult {
+  const TripBatchResult({required this.affectedCount, required this.revision});
+
+  /// 实际受影响的项数。
+  final int affectedCount;
+
+  /// 写入后行程的最新 revision。批量只递增一次，故这里恒为原值 +1。
+  final int revision;
 }
 
 abstract interface class TripRepository {
-  Future<TripPlan?> loadPlan();
+  /// 读取一个行程的完整内容。
+  ///
+  /// [tripId] 为空时取最近更新的那一个——首次进入行程页时还没有选中项，需要有
+  /// 一个确定的默认值。
+  Future<TripPlan?> loadPlan({String? tripId});
+
+  /// 列出用户的全部行程，按最近更新排序。
+  ///
+  /// 只取列表所需的字段，不含嵌套的日期与项：切换器只显示标题与日期区间，
+  /// 为此拉全部行程的全部项会让请求量随行程数线性膨胀。
+  Future<List<TripSummary>> listTrips();
+}
+
+/// 预算口径，对应 `trips.budget_scope`。
+enum TripBudgetScope {
+  perPerson('per_person'),
+  total('total');
+
+  const TripBudgetScope(this.wireName);
+
+  final String wireName;
+}
+
+/// 行程列表项。不含日期与行程项，仅够渲染切换器。
+@immutable
+class TripSummary {
+  const TripSummary({
+    required this.id,
+    required this.title,
+    required this.startDate,
+    required this.endDate,
+    this.timezone = 'Asia/Shanghai',
+    this.updatedAt,
+  });
+
+  final String id;
+  final String title;
+
+  /// 行程时区下的起止自然日。
+  final DateTime startDate;
+  final DateTime endDate;
+  final String timezone;
+  final DateTime? updatedAt;
+
+  /// 行程横跨的天数，含首尾两端。
+  int get dayCount => endDate.difference(startDate).inDays + 1;
 }
 
 class InMemoryTripRepository implements TripRepository {
@@ -85,7 +197,25 @@ class InMemoryTripRepository implements TripRepository {
   final TripPlan? plan;
 
   @override
-  Future<TripPlan?> loadPlan() async => plan;
+  Future<TripPlan?> loadPlan({String? tripId}) async => plan;
+
+  @override
+  Future<List<TripSummary>> listTrips() async {
+    final current = plan;
+    if (current == null) return const [];
+    return [
+      TripSummary(
+        id: current.id,
+        title: current.title,
+        startDate: current.days.isEmpty
+            ? DateTime.now()
+            : current.days.first.date,
+        endDate: current.days.isEmpty ? DateTime.now() : current.days.last.date,
+        timezone: current.timezone,
+        updatedAt: current.updatedAt,
+      ),
+    ];
+  }
 }
 
 /// 后端不可用时的占位仓库。
@@ -98,7 +228,12 @@ class UnavailableTripRepository implements TripRepository {
   final String? message;
 
   @override
-  Future<TripPlan?> loadPlan() async {
+  Future<TripPlan?> loadPlan({String? tripId}) async {
+    throw TripRepositoryException(message ?? SupabaseConfig.missingMessage);
+  }
+
+  @override
+  Future<List<TripSummary>> listTrips() async {
     throw TripRepositoryException(message ?? SupabaseConfig.missingMessage);
   }
 }
@@ -116,16 +251,15 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
   final SupabaseClient _client;
 
   @override
-  Future<TripPlan?> loadPlan() async {
+  Future<TripPlan?> loadPlan({String? tripId}) async {
     _requireSession();
     try {
       // RLS 限定 user_id = auth.uid()，无需在客户端重复过滤。
-      // 取最近更新的一条：当前 UI 只展示单个行程。
-      final rows = await _client
-          .from('trips')
-          .select(_planSelect)
-          .order('updated_at', ascending: false)
-          .limit(1);
+      // 未指定 tripId 时取最近更新的一条作为默认选中项。
+      final query = _client.from('trips').select(_planSelect);
+      final rows = tripId == null
+          ? await query.order('updated_at', ascending: false).limit(1)
+          : await query.eq('id', tripId).limit(1);
       if (rows.isEmpty) return null;
       final row = rows.first;
       final sorted = _sortNested(row);
@@ -140,13 +274,50 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     }
   }
 
+  @override
+  Future<List<TripSummary>> listTrips() async {
+    _requireSession();
+    try {
+      final rows = await _client
+          .from('trips')
+          .select('id, title, timezone, start_date, end_date, updated_at')
+          .order('updated_at', ascending: false);
+      return rows
+          .map(
+            (row) => TripSummary(
+              id: row['id'] as String,
+              title: (row['title'] as String?) ?? '未命名行程',
+              startDate: DateTime.parse(row['start_date'] as String),
+              endDate: DateTime.parse(row['end_date'] as String),
+              timezone: (row['timezone'] as String?) ?? 'Asia/Shanghai',
+              updatedAt: row['updated_at'] is String
+                  ? DateTime.tryParse(row['updated_at'] as String)
+                  : null,
+            ),
+          )
+          .toList(growable: false);
+    } on PostgrestException catch (error) {
+      throw _translate(error);
+    } on SocketException catch (_) {
+      throw const TripRepositoryException(
+        '无法连接行程服务，请检查网络后重试。',
+        kind: TripRepositoryErrorKind.network,
+      );
+    }
+  }
+
   /// 创建行程，返回新行程的 id 与 revision。
+  ///
+  /// [budgetLimitMinor] 与 [budgetScope] 必须同时给出或同时省略：库端约束
+  /// `trips_budget_scope_ck` 要求两者共存亡，只给其一会被拒。
   Future<TripWriteResult> createTrip({
     required String title,
     required DateTime startDate,
     required DateTime endDate,
     String timezone = 'Asia/Shanghai',
     int partySize = 1,
+    int? budgetLimitMinor,
+    TripBudgetScope budgetScope = TripBudgetScope.total,
     String? idempotencyKey,
   }) async {
     _requireSession();
@@ -157,6 +328,9 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
       'p_start_date': _formatDate(startDate),
       'p_end_date': _formatDate(endDate),
       'p_party_size': partySize,
+      'p_budget_limit_minor': budgetLimitMinor,
+      // 预算为空时 scope 也必须为空，否则触发 trips_budget_scope_ck。
+      'p_budget_scope': budgetLimitMinor == null ? null : budgetScope.wireName,
     });
     // create_trip 直接返回 trips 行，不带 revision 包装。
     return TripWriteResult(
@@ -188,6 +362,7 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
       endDate: endDate,
       timezone: timezone,
       partySize: partySize,
+      budgetLimitMinor: budgetLimitMinor,
       idempotencyKey: keys.trip,
     );
 
@@ -304,6 +479,35 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     );
   }
 
+  /// 只改标题与备注，不碰时间与状态。
+  ///
+  /// 空标题与超长标题在服务端以 22023 拒绝（而非表约束的 23514），因此这里不做
+  /// 本地长度校验——表单已限长，重复一遍反而多一处需要与库同步的常量。
+  @override
+  Future<TripWriteResult> updateTripItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripItemId,
+    required String title,
+    String? notes,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('update_trip_item', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_trip_item_id': tripItemId,
+      'p_title': title,
+      // 服务端把 btrim 后的空串归一为 NULL，故清空备注传空串即可。
+      'p_notes': notes ?? '',
+    });
+    return TripWriteResult(
+      id: (payload['trip_item'] as Map<String, dynamic>)['id'] as String,
+      revision: (payload['revision'] as num).toInt(),
+    );
+  }
+
   /// 返回删除后行程的最新 revision。不返回项本身——它已经不存在了。
   @override
   Future<int> deleteTripItem({
@@ -338,6 +542,61 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
       'p_timezone': timezone,
     });
     return (payload['items_shifted'] as num?)?.toInt() ?? 0;
+  }
+
+  @override
+  Future<TripBatchResult> batchCancelTripItems({
+    required String tripId,
+    required int expectedRevision,
+    required List<String> tripItemIds,
+    String? idempotencyKey,
+  }) => _batch(
+    'batch_cancel_trip_items',
+    countKey: 'cancelled_count',
+    tripId: tripId,
+    expectedRevision: expectedRevision,
+    tripItemIds: tripItemIds,
+    idempotencyKey: idempotencyKey,
+  );
+
+  @override
+  Future<TripBatchResult> batchDeleteTripItems({
+    required String tripId,
+    required int expectedRevision,
+    required List<String> tripItemIds,
+    String? idempotencyKey,
+  }) => _batch(
+    'batch_delete_trip_items',
+    countKey: 'deleted_count',
+    tripId: tripId,
+    expectedRevision: expectedRevision,
+    tripItemIds: tripItemIds,
+    idempotencyKey: idempotencyKey,
+  );
+
+  /// 两个批量 RPC 的形状完全相同，只有函数名与计数字段不同。
+  Future<TripBatchResult> _batch(
+    String function, {
+    required String countKey,
+    required String tripId,
+    required int expectedRevision,
+    required List<String> tripItemIds,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    if (tripItemIds.isEmpty) {
+      throw const TripRepositoryException('请先选择要操作的行程项。');
+    }
+    final payload = await _rpc(function, {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+      'p_trip_item_ids': tripItemIds,
+    });
+    return TripBatchResult(
+      affectedCount: (payload[countKey] as num?)?.toInt() ?? 0,
+      revision: (payload['revision'] as num).toInt(),
+    );
   }
 
   /// 添加一个行程项。时间以 UTC 序列化，服务端列为 timestamptz。
@@ -437,10 +696,40 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     }
   }
 
+  /// 添加一个自由安排节点。position 由调用方经 [countItemsOnDay] 推导后传入。
+  @override
+  Future<TripWriteResult> addBreakItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripDayId,
+    required String title,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    String? notes,
+    String? idempotencyKey,
+  }) async {
+    final position = await countItemsOnDay(tripDayId);
+    return addTripItem(
+      tripId: tripId,
+      expectedRevision: expectedRevision,
+      tripDayId: tripDayId,
+      title: title,
+      plannedStartAt: plannedStartAt,
+      plannedEndAt: plannedEndAt,
+      timeSlot: timeSlot,
+      itemType: TripItemType.break_,
+      position: position,
+      notes: notes,
+      idempotencyKey: idempotencyKey,
+    );
+  }
+
   /// 统计某一天已有的行程项数，用于推导新项的 position。
   ///
   /// `trip_items` 对 (trip_day_id, position) 有唯一约束（仅非取消项，见
   /// itinerary_schema.sql:111），position 固定传 0 会在第二次加入时冲突。
+  @override
   Future<int> countItemsOnDay(String tripDayId) async {
     _requireSession();
     try {
@@ -492,23 +781,21 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
   /// 嵌套关系无法用顶层 `.order()` 排序，PostgREST 的 referencedTable 排序在
   /// 深层嵌套下不稳定，故在客户端按 local_date / position 排一次。
   Map<String, dynamic> _sortNested(Map<String, dynamic> row) {
-    final days = [...?(row['trip_days'] as List?)]
-        .whereType<Map<String, dynamic>>()
-        .map((day) {
-          // 已取消的项仍要展示：用户决策（2026-08-24）是软删除后可见且可恢复，
-          // 过滤掉就没有恢复入口了。排序时沉到当天末尾——它们不占 position
-          // （唯一索引排除 cancelled），混在中间会打乱可执行项的顺序感。
-          final items = [...?(day['trip_items'] as List?)]
-              .whereType<Map<String, dynamic>>()
-              .toList()
-            ..sort(_byPosition);
-          return {...day, 'trip_items': items};
-        })
-        .toList()
-      ..sort(
-        (a, b) =>
-            (a['local_date'] as String).compareTo(b['local_date'] as String),
-      );
+    final days =
+        [...?(row['trip_days'] as List?)].whereType<Map<String, dynamic>>().map(
+          (day) {
+            // 已取消的项仍要展示：用户决策（2026-08-24）是软删除后可见且可恢复，
+            // 过滤掉就没有恢复入口了。排序时沉到当天末尾——它们不占 position
+            // （唯一索引排除 cancelled），混在中间会打乱可执行项的顺序感。
+            final items = [
+              ...?(day['trip_items'] as List?),
+            ].whereType<Map<String, dynamic>>().toList()..sort(_byPosition);
+            return {...day, 'trip_items': items};
+          },
+        ).toList()..sort(
+          (a, b) =>
+              (a['local_date'] as String).compareTo(b['local_date'] as String),
+        );
     return {...row, 'trip_days': days};
   }
 
@@ -578,10 +865,7 @@ class PlaceSnapshot {
     this.latitude,
     this.longitude,
     this.coordinateSystem = PlaceCoordinateSystem.gcj02,
-  }) : assert(
-         (latitude == null) == (longitude == null),
-         '经纬度必须同时提供或同时省略',
-       );
+  }) : assert((latitude == null) == (longitude == null), '经纬度必须同时提供或同时省略');
 
   static const int schemaVersion = 1;
 
@@ -626,8 +910,7 @@ class CreateTripKeys {
   final Map<int, String> _dayKeys = {};
 
   /// 第 [offset] 天的幂等键，按需生成后固定不变。
-  String dayKeyAt(int offset) =>
-      _dayKeys.putIfAbsent(offset, generateUuidV4);
+  String dayKeyAt(int offset) => _dayKeys.putIfAbsent(offset, generateUuidV4);
 }
 
 /// 行程中的一天，供排期时选择。
@@ -694,7 +977,10 @@ class TripWriteResult {
 }
 
 class TripRepositoryException implements Exception {
-  const TripRepositoryException(this.message, {this.kind = TripRepositoryErrorKind.unavailable});
+  const TripRepositoryException(
+    this.message, {
+    this.kind = TripRepositoryErrorKind.unavailable,
+  });
 
   final String message;
   final TripRepositoryErrorKind kind;
@@ -709,7 +995,23 @@ class DemoTripRepository implements TripRepository {
   const DemoTripRepository();
 
   @override
-  Future<TripPlan?> loadPlan() async {
+  Future<List<TripSummary>> listTrips() async {
+    final plan = await loadPlan();
+    if (plan == null) return const [];
+    return [
+      TripSummary(
+        id: plan.id,
+        title: plan.title,
+        startDate: plan.days.first.date,
+        endDate: plan.days.last.date,
+        timezone: plan.timezone,
+        updatedAt: plan.updatedAt,
+      ),
+    ];
+  }
+
+  @override
+  Future<TripPlan?> loadPlan({String? tripId}) async {
     final day = DateTime(2026, 8, 22);
     return TripPlan(
       id: 'demo-shanghai-food-day',
@@ -778,8 +1080,12 @@ class TripPlanSummary {
       return Duration.zero;
     }
     final stops = plan.days.expand((day) => day.stops).toList(growable: false);
-    final start = stops.map((stop) => stop.startAt).reduce((a, b) => a.isBefore(b) ? a : b);
-    final end = stops.map((stop) => stop.endAt).reduce((a, b) => a.isAfter(b) ? a : b);
+    final start = stops
+        .map((stop) => stop.startAt)
+        .reduce((a, b) => a.isBefore(b) ? a : b);
+    final end = stops
+        .map((stop) => stop.endAt)
+        .reduce((a, b) => a.isAfter(b) ? a : b);
     return end.difference(start);
   }
 

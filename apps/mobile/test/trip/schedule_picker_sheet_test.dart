@@ -11,10 +11,8 @@ TripSchedulingContext buildTrip({int dayCount = 3}) {
     timezone: 'Asia/Shanghai',
     days: List.generate(
       dayCount,
-      (index) => TripDayRef(
-        id: 'day-$index',
-        localDate: DateTime(2026, 9, 1 + index),
-      ),
+      (index) =>
+          TripDayRef(id: 'day-$index', localDate: DateTime(2026, 9, 1 + index)),
     ),
   );
 }

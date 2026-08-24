@@ -16,7 +16,11 @@ class AmapSurface extends StatefulWidget {
     super.key,
     this.onMapCreated,
     this.markers = const <Marker>{},
+    this.polylines = const <Polyline>{},
     this.onMapTap,
+    this.initialCameraPosition,
+    this.gesturesEnabled = true,
+    this.eagerGestures = true,
   });
 
   final void Function(AMapController controller)? onMapCreated;
@@ -24,8 +28,25 @@ class AmapSurface extends StatefulWidget {
   /// 要渲染的标记集合。插件按 marker id 做增量更新，重复传入同一集合不会闪烁。
   final Set<Marker> markers;
 
+  /// 要渲染的折线集合，用于路线。与 marker 同理需由上层缓存后传入。
+  final Set<Polyline> polylines;
+
   /// 点击地图空白处。用于收起地点详情面板。
   final void Function(LatLng position)? onMapTap;
+
+  /// 初始视野。为空时用 [initialCamera]。
+  final CameraPosition? initialCameraPosition;
+
+  /// 是否允许拖拽与缩放。
+  ///
+  /// 嵌在滚动列表里的小地图应置 false：地图与列表都想响应纵向拖拽，两者必然打架。
+  final bool gesturesEnabled;
+
+  /// 是否抢占父级手势。
+  ///
+  /// 全屏地图需要（否则外层滚动会夺走拖拽），而列表内的小地图必须置 false，
+  /// 否则 [EagerGestureRecognizer] 会吞掉页面的纵向滚动。
+  final bool eagerGestures;
 
   /// 默认视野中心（大连），在定位能力接入前作为回退中心点。
   static const CameraPosition initialCamera = CameraPosition(
@@ -72,23 +93,29 @@ class _AmapSurfaceState extends State<AmapSurface> {
   @override
   Widget build(BuildContext context) {
     return AMapWidget(
-      initialCameraPosition: AmapSurface.initialCamera,
+      initialCameraPosition:
+          widget.initialCameraPosition ?? AmapSurface.initialCamera,
       onMapCreated: widget.onMapCreated,
       markers: widget.markers,
+      polylines: widget.polylines,
       onTap: widget.onMapTap,
-      // 单指拖拽与双指缩放为本阶段的硬性要求。
-      scrollGesturesEnabled: true,
-      zoomGesturesEnabled: true,
+      // 全屏地图需要单指拖拽与双指缩放；嵌入式小地图关闭手势，避免与页面滚动
+      // 争夺同一个纵向拖拽。
+      scrollGesturesEnabled: widget.gesturesEnabled,
+      zoomGesturesEnabled: widget.gesturesEnabled,
       // 旋转与倾斜暂不开放：地图需保持正北朝上，避免用户误操作后
       // 难以恢复方向，也便于后续路线视图与时间表保持一致的方位参照。
       rotateGesturesEnabled: false,
       tiltGesturesEnabled: false,
-      scaleEnabled: true,
+      scaleEnabled: widget.gesturesEnabled,
       compassEnabled: false,
-      // 地图占据除底部指令栏外的全部空间，手势不应被父级滚动组件截获。
-      gestureRecognizers: <Factory<OneSequenceGestureRecognizer>>{
-        Factory<EagerGestureRecognizer>(EagerGestureRecognizer.new),
-      },
+      // 地图占据除底部指令栏外的全部空间时，手势不应被父级滚动组件截获；
+      // 反之嵌在列表里的小地图必须放行，否则页面无法滚动。
+      gestureRecognizers: widget.eagerGestures
+          ? <Factory<OneSequenceGestureRecognizer>>{
+              Factory<EagerGestureRecognizer>(EagerGestureRecognizer.new),
+            }
+          : const <Factory<OneSequenceGestureRecognizer>>{},
     );
   }
 }

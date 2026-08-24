@@ -1,7 +1,8 @@
 import 'dart:async';
 
 import 'package:supabase_flutter/supabase_flutter.dart' hide AuthException;
-import 'package:supabase_flutter/supabase_flutter.dart' as supabase
+import 'package:supabase_flutter/supabase_flutter.dart'
+    as supabase
     show AuthApiException, AuthRetryableFetchException;
 
 /// 认证能力抽象。
@@ -122,7 +123,10 @@ class SupabaseAuthService implements AuthService {
     try {
       return await action();
     } on supabase.AuthApiException catch (error) {
-      final kind = authErrorKindFor(code: error.code, statusCode: error.statusCode);
+      final kind = authErrorKindFor(
+        code: error.code,
+        statusCode: error.statusCode,
+      );
       throw AuthFailure(
         authMessageFor(kind, fallback: error.message),
         kind: kind,
@@ -139,7 +143,8 @@ class SupabaseAuthService implements AuthService {
 /// 将 GoTrue 错误码映射为客户端分支，与 SDK 类型解耦以便单测直接覆盖。
 AuthErrorKind authErrorKindFor({String? code, String? statusCode}) {
   return switch (code) {
-    'invalid_credentials' || 'invalid_grant' => AuthErrorKind.invalidCredentials,
+    'invalid_credentials' ||
+    'invalid_grant' => AuthErrorKind.invalidCredentials,
     'user_already_exists' || 'email_exists' => AuthErrorKind.emailTaken,
     'weak_password' => AuthErrorKind.weakPassword,
     // 旧版 GoTrue 不带 code，仅以 400 表达凭据错误。
