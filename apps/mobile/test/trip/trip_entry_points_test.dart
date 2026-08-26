@@ -67,17 +67,15 @@ void main() {
     expect(find.text('添加节点'), findsOneWidget);
   });
 
-  testWidgets('行程级菜单含更改时区', (tester) async {
+  testWidgets('行程级菜单不再提供修改时区', (tester) async {
     await tester.pumpWidget(wrap(buildRepository()));
     await tester.pumpAndSettle();
 
     await tester.tap(find.byTooltip('行程操作'));
     await tester.pumpAndSettle();
 
-    expect(find.text('更改行程时区'), findsOneWidget);
-    // 新建行程需要 SupabaseTripRepository，Fake 不具备该能力，故不出现。
-    // 这一条锁住「能力缺失时不给出点了报错的入口」。
-    expect(find.text('新建行程'), findsNothing);
+    expect(find.text('更改行程时区'), findsNothing);
+    expect(find.text('删除行程'), findsOneWidget);
   });
 
   testWidgets('无写入能力时不给出添加节点与行程操作入口', (tester) async {

@@ -162,21 +162,6 @@ class TripStopActions {
     );
   }
 
-  /// 更改行程时区。已排入的项保留当地钟点，UTC 时刻由服务端重算。
-  Future<void> changeTimezone({
-    required TripPlan plan,
-    required String timezone,
-  }) {
-    return _run(
-      (writer) => writer.changeTripTimezone(
-        tripId: plan.id,
-        expectedRevision: plan.revision,
-        timezone: timezone,
-      ),
-      success: '行程时区已改为 $timezone，各项保留原当地时间',
-    );
-  }
-
   /// 添加一个自由安排节点。
   Future<void> addBreak({
     required TripPlan plan,

@@ -157,20 +157,6 @@ class FakeWritableRepository implements TripRepository, TripWriter {
   }
 
   @override
-  Future<int> changeTripTimezone({
-    required String tripId,
-    required int expectedRevision,
-    required String timezone,
-    String? idempotencyKey,
-  }) async {
-    calls.add({'op': 'timezone', 'timezone': timezone});
-    final failure = error;
-    if (failure != null) throw failure;
-    _plan = _plan.copyWith(timezone: timezone, revision: _plan.revision + 1);
-    return _plan.days.fold<int>(0, (sum, day) => sum + day.stops.length);
-  }
-
-  @override
   Future<TripWriteResult> addBreakItem({
     required String tripId,
     required int expectedRevision,

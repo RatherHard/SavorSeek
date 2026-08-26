@@ -56,13 +56,6 @@ Future<void> openMenu(WidgetTester tester, int index) async {
   await tester.pumpAndSettle();
 }
 
-Future<void> openTimezonePicker(WidgetTester tester) async {
-  await tester.tap(find.byTooltip('行程操作'));
-  await tester.pumpAndSettle();
-  await tester.tap(find.text('更改行程时区'));
-  await tester.pumpAndSettle();
-}
-
 void main() {
   setUpAll(TripTimeZone.ensureInitialized);
 
@@ -96,13 +89,11 @@ void main() {
     expect(repository.calls.single['tripItemId'], 'item-planned');
   });
 
-  testWidgets('完成行程需要确认并调用 completeTrip', (tester) async {
+  testWidgets('完成行程底部按钮需要确认并调用 completeTrip', (tester) async {
     final repository = FakeWritableRepository(buildPlan());
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('行程操作'));
-    await tester.pumpAndSettle();
     await tester.tap(find.text('完成行程'));
     await tester.pumpAndSettle();
     expect(find.text('完成这份行程？'), findsOneWidget);
@@ -112,16 +103,17 @@ void main() {
     expect(repository.calls.single['op'], 'completeTrip');
   });
 
-  testWidgets('行程级取消调用 cancelTrip', (tester) async {
+  testWidgets('取消行程底部按钮需要确认并调用 cancelTrip', (tester) async {
     final repository = FakeWritableRepository(buildPlan());
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('行程操作'));
-    await tester.pumpAndSettle();
     await tester.tap(find.text('取消行程'));
     await tester.pumpAndSettle();
+    expect(find.text('取消这份行程？'), findsOneWidget);
 
+    await tester.tap(find.widgetWithText(FilledButton, '确认取消'));
+    await tester.pumpAndSettle();
     expect(repository.calls.single['op'], 'cancelTrip');
   });
 
@@ -157,13 +149,11 @@ void main() {
     expect(find.textContaining('相差 +1 小时'), findsOneWidget);
   });
 
-  testWidgets('选择新时区后调用 changeTripTimezone', (tester) async {
-    final repository = FakeWritableRepository(buildPlan());
-    await tester.pumpWidget(wrap(repository));
+  testWidgets('不再提供修改行程时区入口', (tester) async {
+    await tester.pumpWidget(wrap(FakeWritableRepository(buildPlan())));
     await tester.pumpAndSettle();
-    await openTimezonePicker(tester);
-    await tester.tap(find.text('日本（东京）'));
+    await tester.tap(find.byTooltip('行程操作'));
     await tester.pumpAndSettle();
-    expect(repository.calls.single['op'], 'timezone');
+    expect(find.text('更改行程时区'), findsNothing);
   });
 }

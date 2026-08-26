@@ -4,17 +4,36 @@
 -- 时不要继续客户端发布，先检查迁移是否完整应用。
 
 select 'edit_trip_item exists' as check_name,
+  to_regprocedure(
+    'public.edit_trip_item(uuid,bigint,uuid,uuid,text,text,uuid,timestamptz,timestamptz,text)'
+  ) is not null as passed;
+
+select 'change_trip_timezone dropped' as check_name,
+  to_regprocedure('public.change_trip_timezone(uuid,bigint,uuid,text)') is null as passed;
+
+select 'trips timezone retained' as check_name,
   exists (
-    select 1
-    from pg_proc p
-    join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public'
-      and p.proname = 'edit_trip_item'
-      and pg_get_function_identity_arguments(p.oid) =
-        'p_trip_id uuid, p_expected_revision bigint, p_idempotency_key uuid, p_trip_item_id uuid, p_title text, p_notes text, p_trip_day_id uuid, p_planned_start_at timestamp with time zone, p_planned_end_at timestamp with time zone, p_time_slot text'
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'trips'
+      and column_name = 'timezone'
   ) as passed;
 
-select 'complete_trip exists' as check_name,
+select 'trip item planned timestamps retained' as check_name,
+  (to_regclass('public.trip_items') is not null
+    and exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'trip_items'
+        and column_name = 'planned_start_at'
+    )
+    and exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'trip_items'
+        and column_name = 'planned_end_at'
+    )) as passed;
+
   to_regprocedure('public.complete_trip(uuid,bigint,uuid)') is not null as passed;
 
 select 'cancel_trip exists' as check_name,
@@ -63,7 +82,13 @@ select 'no cancelled items remain' as check_name,
     select 1 from public.trip_items where status = 'cancelled'
   ) as passed;
 
-select 'draft to completed transition present' as check_name,
+select 'timezone mutation flag removed' as check_name,
+  position('timezone_migration' in pg_get_functiondef('public.validate_trip_row()'::regprocedure)) = 0 as passed;
+
+select 'timezone update trigger rejects mutation' as check_name,
+  position('timezone cannot be changed after trip creation'
+    in pg_get_functiondef('public.validate_trip_row()'::regprocedure)) > 0 as passed;
+
   position('(old.status = ''draft'' and new.status in (''confirmed'', ''completed'', ''cancelled''))' in pg_get_functiondef('public.validate_trip_row()'::regprocedure)) > 0 as passed;
 
 select 'completed guard uses P0003' as check_name,

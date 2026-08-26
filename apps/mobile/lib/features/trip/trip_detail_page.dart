@@ -10,8 +10,8 @@ import 'package:savorseek/features/places/place_repository.dart';
 
 import 'edit_stop_sheet.dart';
 import 'add_stop_sheet.dart';
-import 'timezone_picker_sheet.dart';
 import 'trip_controller.dart';
+import 'trip_lifecycle_action_bar.dart';
 import 'trip_lifecycle_actions.dart';
 import 'trip_lifecycle_menu.dart';
 import 'trip_models.dart';
@@ -21,6 +21,7 @@ import 'trip_route_page.dart';
 import 'trip_route_service.dart';
 import 'trip_status_views.dart';
 import 'trip_stop_actions.dart';
+import 'trip_temporal_status.dart';
 import 'trip_time_zone.dart';
 import 'trip_timeline.dart';
 
@@ -150,15 +151,23 @@ class _TripDetailPageState extends State<TripDetailPage> {
   }
 
   void _showMessage(String message, {TripUndo? undo}) {
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      SnackBar(
-        content: Text(message),
-        // 误操作后的第一反应是「撤销」，而不是回列表里找刚才那一项再选恢复。
-        action: undo == null
-            ? null
-            : SnackBarAction(label: '撤销', onPressed: () => _runUndo(undo)),
-      ),
-    );
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: undo == null
+              ? const Duration(seconds: 3)
+              : const Duration(seconds: 5),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 96),
+          action: undo == null
+              ? null
+              : SnackBarAction(label: '撤销', onPressed: () => _runUndo(undo)),
+        ),
+      );
   }
 
   /// 撤销必须用「撤销时」的最新 revision，而不是被撤销那次操作所用的旧值。
@@ -178,6 +187,7 @@ class _TripDetailPageState extends State<TripDetailPage> {
   Future<void> _cancelTrip(TripPlan plan) async {
     final lifecycle = _lifecycleActions;
     if (lifecycle == null) return;
+    if (!await confirmCancelTrip(context)) return;
     await lifecycle.cancel(plan: plan);
   }
 
@@ -391,22 +401,7 @@ class _TripDetailPageState extends State<TripDetailPage> {
         .toList(growable: false);
   }
 
-  /// 更改行程时区。
-  ///
-  /// 已排入的项保留当地钟点（19:00 仍是 19:00），UTC 时刻由服务端重算。这是唯一
-  /// 能让项继续归属原 trip_day 的语义——保留绝对时刻会让当地日期跳到相邻一天。
-  Future<void> _changeTimezone(TripPlan plan) async {
-    final actions = _actions;
-    if (actions == null) return;
-    final picked = await showTimezonePickerSheet(
-      context,
-      current: plan.timezone,
-    );
-    if (picked == null || picked == plan.timezone || !mounted) return;
-    await actions.changeTimezone(plan: plan, timezone: picked);
-  }
-
-  /// 打开全屏路线视图。
+  /// 添加一个自由安排节点。
   ///
   /// 小地图关闭了手势（否则与页面滚动争夺同一个纵向拖拽），因此缩放与平移
   /// 只在全屏视图里提供。
@@ -436,9 +431,6 @@ class _TripDetailPageState extends State<TripDetailPage> {
             TripLifecycleMenu(
               plan: state.plan,
               onSelected: (action) => switch (action) {
-                TripAction.changeTimezone => _changeTimezone(state.plan),
-                TripAction.complete => _completeTrip(state.plan),
-                TripAction.cancel => _cancelTrip(state.plan),
                 TripAction.delete => _deleteTrip(state.plan),
               },
             ),
@@ -479,6 +471,13 @@ class _TripDetailPageState extends State<TripDetailPage> {
               onAddStop: _actions == null || plan.isReadOnly
                   ? null
                   : () => _addStop(plan),
+              onCompleteTrip:
+                  _lifecycleActions == null || plan.status.isTerminal
+                  ? null
+                  : () => _completeTrip(plan),
+              onCancelTrip: _lifecycleActions == null || plan.status.isTerminal
+                  ? null
+                  : () => _cancelTrip(plan),
               mapConsent: widget.mapConsent,
               routeService: widget.routeService,
               onOpenRoute: widget.mapConsent == null
@@ -505,6 +504,8 @@ class _TripDetail extends StatelessWidget {
     required this.plan,
     this.onStopAction,
     this.onAddStop,
+    this.onCompleteTrip,
+    this.onCancelTrip,
     this.mapConsent,
     this.routeService,
     this.onOpenRoute,
@@ -522,6 +523,8 @@ class _TripDetail extends StatelessWidget {
 
   /// 添加行程节点。为空时不给出入口。
   final VoidCallback? onAddStop;
+  final VoidCallback? onCompleteTrip;
+  final VoidCallback? onCancelTrip;
 
   final AmapConsent? mapConsent;
   final TripRouteService? routeService;
@@ -539,7 +542,10 @@ class _TripDetail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scroll = _buildScrollView(context);
-    if (onAddStop == null && !_isSelecting) {
+    if (onAddStop == null &&
+        onCompleteTrip == null &&
+        onCancelTrip == null &&
+        !_isSelecting) {
       return KeyedSubtree(key: key, child: scroll);
     }
     return Stack(
@@ -559,14 +565,17 @@ class _TripDetail extends StatelessWidget {
               onExit: onClearSelection,
             ),
           )
-        else if (onAddStop != null)
+        else if (onAddStop != null ||
+            onCompleteTrip != null ||
+            onCancelTrip != null)
           Positioned(
+            left: AppTokens.spaceMd,
             right: AppTokens.spaceMd,
             bottom: AppTokens.spaceMd,
-            child: FloatingActionButton.extended(
-              onPressed: onAddStop,
-              icon: const Icon(Icons.add),
-              label: const Text('添加节点'),
+            child: TripLifecycleActionBar(
+              onComplete: onCompleteTrip,
+              onCancel: onCancelTrip,
+              onAddStop: onAddStop,
             ),
           ),
       ],
@@ -605,7 +614,9 @@ class _TripDetail extends StatelessWidget {
             AppTokens.spaceMd,
             AppTokens.spaceLg,
             AppTokens.spaceMd,
-            onAddStop == null ? AppTokens.spaceXl : 88,
+            onAddStop == null && onCompleteTrip == null && onCancelTrip == null
+                ? AppTokens.spaceXl
+                : 180,
           ),
           sliver: SliverList.builder(
             itemCount: plan.days.length,
@@ -632,6 +643,13 @@ class _TripHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    final displayStatus = resolveTripDisplayStatus(
+      persistedStatus: plan.status,
+      startDate: plan.days.isEmpty ? DateTime.now() : plan.days.first.date,
+      endDate: plan.days.isEmpty ? DateTime.now() : plan.days.last.date,
+      timezone: plan.timezone,
+      now: DateTime.now().toUtc(),
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -639,6 +657,13 @@ class _TripHeader extends StatelessWidget {
           plan.destination,
           style: theme.textTheme.bodyMedium?.copyWith(
             color: scheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: AppTokens.spaceSm),
+        Text(
+          tripDisplayStatusLabel(displayStatus),
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: tripDisplayStatusColor(context, displayStatus),
           ),
         ),
         // 仅在与设备有时差时标注时区：同时区行程标出来是冗余噪声，

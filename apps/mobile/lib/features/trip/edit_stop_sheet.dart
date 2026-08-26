@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:savorseek/app/theme/design_tokens.dart';
 
 import 'schedule_picker_sheet.dart';
+import 'trip_duration_picker.dart';
 import 'trip_models.dart';
 import 'trip_repository.dart';
 
@@ -51,7 +52,6 @@ class _EditStopSheet extends StatefulWidget {
 class _EditStopSheetState extends State<_EditStopSheet> {
   static const int _titleMaxLength = 120;
   static const int _noteMaxLength = 1000;
-  static const List<int> _durationChoices = [30, 60, 90, 120, 180];
 
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _titleController = TextEditingController(
@@ -66,7 +66,9 @@ class _EditStopSheetState extends State<_EditStopSheet> {
     hour: widget.stop.startAt.hour,
     minute: widget.stop.startAt.minute,
   );
-  late Duration _duration = widget.stop.endAt.difference(widget.stop.startAt);
+  late Duration _duration = clampTripStopDuration(
+    widget.stop.endAt.difference(widget.stop.startAt),
+  );
 
   TripDayRef _initialDay() {
     for (final day in widget.trip.days) {
@@ -105,6 +107,15 @@ class _EditStopSheetState extends State<_EditStopSheet> {
     );
     if (picked == null) return;
     setState(() => _time = picked);
+  }
+
+  Future<void> _pickDuration() async {
+    final picked = await showTripDurationPicker(
+      context,
+      initialDuration: _duration,
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _duration = picked);
   }
 
   void _submit() {
@@ -188,21 +199,11 @@ class _EditStopSheetState extends State<_EditStopSheet> {
                   value: formatWallClock(_time.hour, _time.minute),
                   onTap: _pickTime,
                 ),
-                const SizedBox(height: AppTokens.spaceSm),
-                Text('停留时长', style: theme.textTheme.labelLarge),
-                const SizedBox(height: AppTokens.spaceXs),
-                Wrap(
-                  spacing: AppTokens.spaceSm,
-                  children: [
-                    for (final minutes in _durationChoices)
-                      ChoiceChip(
-                        label: Text(formatDuration(Duration(minutes: minutes))),
-                        selected: _duration.inMinutes == minutes,
-                        onSelected: (_) => setState(
-                          () => _duration = Duration(minutes: minutes),
-                        ),
-                      ),
-                  ],
+                _PickerTile(
+                  icon: Icons.timer_outlined,
+                  label: '停留时长',
+                  value: formatTripStopDuration(_duration),
+                  onTap: _pickDuration,
                 ),
                 const SizedBox(height: AppTokens.spaceMd),
                 Row(

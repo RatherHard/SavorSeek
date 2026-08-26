@@ -73,14 +73,6 @@ abstract interface class TripWriter {
     String? idempotencyKey,
   });
 
-  /// 更改行程时区。已排入的项保留当地钟点，UTC 时刻由服务端重算。
-  Future<int> changeTripTimezone({
-    required String tripId,
-    required int expectedRevision,
-    required String timezone,
-    String? idempotencyKey,
-  });
-
   /// 完成行程。完成后行程及其节点只读。
   Future<TripWriteResult> completeTrip({
     required String tripId,
@@ -492,24 +484,6 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
       'p_trip_item_id': tripItemId,
     });
     return (payload['revision'] as num).toInt();
-  }
-
-  /// 返回受影响的行程项数。
-  @override
-  Future<int> changeTripTimezone({
-    required String tripId,
-    required int expectedRevision,
-    required String timezone,
-    String? idempotencyKey,
-  }) async {
-    _requireSession();
-    final payload = await _rpc('change_trip_timezone', {
-      'p_trip_id': tripId,
-      'p_expected_revision': expectedRevision,
-      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
-      'p_timezone': timezone,
-    });
-    return (payload['items_shifted'] as num?)?.toInt() ?? 0;
   }
 
   @override
