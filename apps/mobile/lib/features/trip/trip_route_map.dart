@@ -60,12 +60,13 @@ class _TripRouteMapState extends State<TripRouteMap> {
 
   /// 路线服务失败的原因，用于向用户说明「为何是直线」。
   String? _routeFallbackReason;
+  int _routeRequestGeneration = 0;
 
   @override
   void initState() {
     super.initState();
     widget.consent.addListener(_onConsentChanged);
-    _loadRoute();
+    if (widget.consent.agreed) _loadRoute();
   }
 
   @override
@@ -77,9 +78,11 @@ class _TripRouteMapState extends State<TripRouteMap> {
     }
     // 行程换了或节点变了才重取：同一份数据重复请求既浪费配额也会闪。
     if (!_sameStops(oldWidget.plan.routeStops, widget.plan.routeStops)) {
+      _routeRequestGeneration++;
       _roadPath = null;
+      _routeFallbackReason = null;
       _overlaySource = null;
-      _loadRoute();
+      if (widget.consent.agreed) _loadRoute();
     }
   }
 
@@ -90,13 +93,24 @@ class _TripRouteMapState extends State<TripRouteMap> {
   }
 
   void _onConsentChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    if (widget.consent.agreed) {
+      _loadRoute();
+    } else {
+      _routeRequestGeneration++;
+      setState(() {
+        _roadPath = null;
+        _routeFallbackReason = null;
+      });
+    }
   }
 
   static bool _sameStops(List<TripStop> a, List<TripStop> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
       if (a[i].id != b[i].id ||
+          a[i].title != b[i].title ||
+          a[i].subtitle != b[i].subtitle ||
           a[i].latitude != b[i].latitude ||
           a[i].longitude != b[i].longitude) {
         return false;
@@ -107,6 +121,8 @@ class _TripRouteMapState extends State<TripRouteMap> {
 
   /// 取真实路网路线。失败时保持直线，不让整张地图失效。
   Future<void> _loadRoute() async {
+    if (!widget.consent.agreed) return;
+    final generation = ++_routeRequestGeneration;
     final service = widget.routeService;
     final stops = widget.plan.routeStops;
     if (service == null || stops.length < 2) return;
@@ -118,7 +134,9 @@ class _TripRouteMapState extends State<TripRouteMap> {
             RoutePoint(latitude: stop.latitude!, longitude: stop.longitude!),
         ],
       );
-      if (!mounted || path.isEmpty) return;
+      if (!mounted || generation != _routeRequestGeneration || path.isEmpty) {
+        return;
+      }
       setState(() {
         _roadPath = [
           for (final point in path) LatLng(point.latitude, point.longitude),
@@ -128,7 +146,7 @@ class _TripRouteMapState extends State<TripRouteMap> {
       });
     } on TripRouteException catch (error) {
       // 路线服务不可用不该让地图失效：节点仍要显示，连线退化为直线并说明原因。
-      if (!mounted) return;
+      if (!mounted || generation != _routeRequestGeneration) return;
       setState(() {
         _roadPath = null;
         _routeFallbackReason = error.message;
@@ -219,20 +237,27 @@ class _TripRouteMapState extends State<TripRouteMap> {
             color: Colors.transparent,
             child: InkWell(onTap: onTap),
           ),
-        if (_routeFallbackReason case final reason?)
+        if (_badgeText case final text?)
           Positioned(
             left: AppTokens.spaceSm,
             bottom: AppTokens.spaceSm,
-            child: _RouteBadge(text: '直线连接 · $reason'),
-          )
-        else if (_roadPath == null)
-          const Positioned(
-            left: AppTokens.spaceSm,
-            bottom: AppTokens.spaceSm,
-            child: _RouteBadge(text: '直线连接'),
+            child: _RouteBadge(text: text),
           ),
       ],
     );
+  }
+
+  /// 地图角上要向用户说明的事，无需说明时为 null。
+  ///
+  /// 三种情形互斥，故收在一处按优先级判断：散在 build 里写成多路 else 分支时，
+  /// 「单点」这一支很容易被漏掉而落到「直线连接」上。
+  String? get _badgeText {
+    // 单点行程没有任何连线，说「直线连接」是在描述一件不存在的事。
+    if (!widget.plan.hasRouteLine) return '仅一个地点 · 再加一个即可看到路线';
+    if (_routeFallbackReason case final reason?) return '直线连接 · $reason';
+    // 路网未取到时退化为直线，要让用户知道这不是真实路径。
+    if (_roadPath == null) return '直线连接';
+    return null;
   }
 
   /// 把视野落在所有节点的中心，缩放按跨度估算。

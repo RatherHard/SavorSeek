@@ -1,5 +1,4 @@
 import 'dart:io' show SocketException;
-import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -16,7 +15,7 @@ import 'trip_models.dart';
 /// 一次嵌套查询而非逐层拉取：分三次请求即是 N+1，且中途 revision 变化会读到
 /// 不一致的快照。
 const String _planSelect = '''
-id, title, timezone, start_date, end_date, revision, updated_at,
+id, title, timezone, start_date, end_date, status, revision, updated_at,
 trip_days(
   id, local_date, available_start_time, available_end_time, notes,
   trip_items(
@@ -42,30 +41,21 @@ abstract interface class TripWriter {
     String? idempotencyKey,
   });
 
-  /// 取消行程项（软删除）。记录与快照保留，可经 [restoreTripItem] 恢复。
-  Future<TripWriteResult> cancelTripItem({
+  /// 合并修改行程项的内容与排期。一次 RPC 同时写入标题、备注、日期、时间、时长。
+  Future<TripWriteResult> editTripItem({
     required String tripId,
     required int expectedRevision,
     required String tripItemId,
+    required String title,
+    String? notes,
+    required String tripDayId,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
     String? idempotencyKey,
   });
 
-  /// 把已取消的项恢复为待安排。
-  Future<TripWriteResult> restoreTripItem({
-    required String tripId,
-    required int expectedRevision,
-    required String tripItemId,
-    String? idempotencyKey,
-  });
-
-  /// 修改行程项的标题与备注。
-  ///
-  /// [notes] 传 null 或空串即清空备注——服务端把 btrim 后的空串归一为 NULL。
-  /// 不支持「传 null 表示不改」：清空与不改都会想用 null 表达，二义性只能靠额外
-  /// 哨兵值解决，而表单本就总是把两个字段一起送。
-  ///
-  /// 已取消的项可编辑（恢复前顺手改备注是合理的）；已完成与已跳过的项不可编辑，
-  /// 服务端返回 22023。
+  /// 修改行程项的标题与备注，不碰时间与状态。
   Future<TripWriteResult> updateTripItem({
     required String tripId,
     required int expectedRevision,
@@ -91,10 +81,32 @@ abstract interface class TripWriter {
     String? idempotencyKey,
   });
 
+  /// 完成行程。完成后行程及其节点只读。
+  Future<TripWriteResult> completeTrip({
+    required String tripId,
+    required int expectedRevision,
+    String? idempotencyKey,
+  });
+
+  /// 取消行程。取消后仍允许整理节点记录。
+  Future<TripWriteResult> cancelTrip({
+    required String tripId,
+    required int expectedRevision,
+    String? idempotencyKey,
+  });
+
+  /// 删除整份行程及其日期、节点。服务端级联删除子表。
+  Future<int> deleteTrip({
+    required String tripId,
+    required int expectedRevision,
+    String? idempotencyKey,
+  });
+
   /// 添加一个自由安排节点（`break`）。
   ///
-  /// 只暴露 `break` 这一种：地点项必须携带 placeId 与快照（库端 trigger 强制），
-  /// 而行程页没有地点检索能力，地点节点仍从探索页加入。
+  /// 与 [addPlaceItem] 分成两个方法而非共用一个带可选参数的版本：库端 trigger 要求
+  /// `break` 不得带 placeId 与快照、`place_visit` 必须两者都带，合成一个方法就得在
+  /// 运行期校验这组互斥，拆开后由签名本身保证。
   Future<TripWriteResult> addBreakItem({
     required String tripId,
     required int expectedRevision,
@@ -107,19 +119,28 @@ abstract interface class TripWriter {
     String? idempotencyKey,
   });
 
-  /// 统计某一天已有的非取消项数，用于推导新节点的 position。
-  Future<int> countItemsOnDay(String tripDayId);
-
-  /// 批量取消（软删除）。整批原子：任一项不合法则全部不生效。
+  /// 添加一个地点节点（`place_visit`）。
   ///
-  /// 单独的 RPC 而非循环调用单项版本：每次单项写入都会递增 revision，循环到
-  /// 第二次时 expected_revision 已过期，必然收到 P0002。
-  Future<TripBatchResult> batchCancelTripItems({
+  /// [latitude] 与 [longitude] 必须同时给出或同时省略（库端 trigger 强制）。缺坐标
+  /// 的地点仍可加入：高德偶有 POI 无坐标，为此拒绝写入等于因为地图画不出就不让用户
+  /// 排这家店。此时该节点不参与路线绘制。
+  Future<TripWriteResult> addPlaceItem({
     required String tripId,
     required int expectedRevision,
-    required List<String> tripItemIds,
+    required String tripDayId,
+    required String placeId,
+    required String title,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    double? latitude,
+    double? longitude,
+    String? notes,
     String? idempotencyKey,
   });
+
+  /// 统计某一天已有的节点数，用于推导新节点的 position。
+  Future<int> countItemsOnDay(String tripDayId);
 
   /// 批量硬删除。不可恢复，调用方须先向用户确认。
   Future<TripBatchResult> batchDeleteTripItems({
@@ -175,6 +196,7 @@ class TripSummary {
     required this.startDate,
     required this.endDate,
     this.timezone = 'Asia/Shanghai',
+    this.status = TripStatus.draft,
     this.updatedAt,
   });
 
@@ -185,57 +207,11 @@ class TripSummary {
   final DateTime startDate;
   final DateTime endDate;
   final String timezone;
+  final TripStatus status;
   final DateTime? updatedAt;
 
   /// 行程横跨的天数，含首尾两端。
   int get dayCount => endDate.difference(startDate).inDays + 1;
-}
-
-class InMemoryTripRepository implements TripRepository {
-  const InMemoryTripRepository({this.plan});
-
-  final TripPlan? plan;
-
-  @override
-  Future<TripPlan?> loadPlan({String? tripId}) async => plan;
-
-  @override
-  Future<List<TripSummary>> listTrips() async {
-    final current = plan;
-    if (current == null) return const [];
-    return [
-      TripSummary(
-        id: current.id,
-        title: current.title,
-        startDate: current.days.isEmpty
-            ? DateTime.now()
-            : current.days.first.date,
-        endDate: current.days.isEmpty ? DateTime.now() : current.days.last.date,
-        timezone: current.timezone,
-        updatedAt: current.updatedAt,
-      ),
-    ];
-  }
-}
-
-/// 后端不可用时的占位仓库。
-///
-/// 存在的意义是让「未注入 Supabase 参数」与「查询失败」走同一条 UI 错误分支，
-/// 而不是在 Widget 树里散落 null 判断。
-class UnavailableTripRepository implements TripRepository {
-  const UnavailableTripRepository([this.message]);
-
-  final String? message;
-
-  @override
-  Future<TripPlan?> loadPlan({String? tripId}) async {
-    throw TripRepositoryException(message ?? SupabaseConfig.missingMessage);
-  }
-
-  @override
-  Future<List<TripSummary>> listTrips() async {
-    throw TripRepositoryException(message ?? SupabaseConfig.missingMessage);
-  }
 }
 
 /// 基于自建 Supabase 的行程仓库。
@@ -280,7 +256,9 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     try {
       final rows = await _client
           .from('trips')
-          .select('id, title, timezone, start_date, end_date, updated_at')
+          .select(
+            'id, title, timezone, start_date, end_date, status, updated_at',
+          )
           .order('updated_at', ascending: false);
       return rows
           .map(
@@ -290,6 +268,7 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
               startDate: DateTime.parse(row['start_date'] as String),
               endDate: DateTime.parse(row['end_date'] as String),
               timezone: (row['timezone'] as String?) ?? 'Asia/Shanghai',
+              status: TripMapper.tripStatusFromWire(row['status'] as String?),
               updatedAt: row['updated_at'] is String
                   ? DateTime.tryParse(row['updated_at'] as String)
                   : null,
@@ -439,19 +418,32 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     );
   }
 
+  /// 合并修改行程项的标题、备注、日期、时间与时段。
   @override
-  Future<TripWriteResult> cancelTripItem({
+  Future<TripWriteResult> editTripItem({
     required String tripId,
     required int expectedRevision,
     required String tripItemId,
+    required String title,
+    String? notes,
+    required String tripDayId,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
     String? idempotencyKey,
   }) async {
     _requireSession();
-    final payload = await _rpc('cancel_trip_item', {
+    final payload = await _rpc('edit_trip_item', {
       'p_trip_id': tripId,
       'p_expected_revision': expectedRevision,
       'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
       'p_trip_item_id': tripItemId,
+      'p_title': title,
+      'p_notes': notes ?? '',
+      'p_trip_day_id': tripDayId,
+      'p_planned_start_at': plannedStartAt.toUtc().toIso8601String(),
+      'p_planned_end_at': plannedEndAt.toUtc().toIso8601String(),
+      'p_time_slot': timeSlot.wireName,
     });
     return TripWriteResult(
       id: (payload['trip_item'] as Map<String, dynamic>)['id'] as String,
@@ -459,30 +451,7 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     );
   }
 
-  @override
-  Future<TripWriteResult> restoreTripItem({
-    required String tripId,
-    required int expectedRevision,
-    required String tripItemId,
-    String? idempotencyKey,
-  }) async {
-    _requireSession();
-    final payload = await _rpc('restore_trip_item', {
-      'p_trip_id': tripId,
-      'p_expected_revision': expectedRevision,
-      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
-      'p_trip_item_id': tripItemId,
-    });
-    return TripWriteResult(
-      id: (payload['trip_item'] as Map<String, dynamic>)['id'] as String,
-      revision: (payload['revision'] as num).toInt(),
-    );
-  }
-
-  /// 只改标题与备注，不碰时间与状态。
-  ///
-  /// 空标题与超长标题在服务端以 22023 拒绝（而非表约束的 23514），因此这里不做
-  /// 本地长度校验——表单已限长，重复一遍反而多一处需要与库同步的常量。
+  /// 修改行程项的标题与备注，不碰时间与状态。
   @override
   Future<TripWriteResult> updateTripItem({
     required String tripId,
@@ -499,7 +468,6 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
       'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
       'p_trip_item_id': tripItemId,
       'p_title': title,
-      // 服务端把 btrim 后的空串归一为 NULL，故清空备注传空串即可。
       'p_notes': notes ?? '',
     });
     return TripWriteResult(
@@ -508,7 +476,7 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     );
   }
 
-  /// 返回删除后行程的最新 revision。不返回项本身——它已经不存在了。
+  /// 返回删除后行程项的最新 revision。不返回项本身——它已经不存在了。
   @override
   Future<int> deleteTripItem({
     required String tripId,
@@ -543,21 +511,6 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     });
     return (payload['items_shifted'] as num?)?.toInt() ?? 0;
   }
-
-  @override
-  Future<TripBatchResult> batchCancelTripItems({
-    required String tripId,
-    required int expectedRevision,
-    required List<String> tripItemIds,
-    String? idempotencyKey,
-  }) => _batch(
-    'batch_cancel_trip_items',
-    countKey: 'cancelled_count',
-    tripId: tripId,
-    expectedRevision: expectedRevision,
-    tripItemIds: tripItemIds,
-    idempotencyKey: idempotencyKey,
-  );
 
   @override
   Future<TripBatchResult> batchDeleteTripItems({
@@ -597,6 +550,57 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
       affectedCount: (payload[countKey] as num?)?.toInt() ?? 0,
       revision: (payload['revision'] as num).toInt(),
     );
+  }
+
+  @override
+  Future<TripWriteResult> completeTrip({
+    required String tripId,
+    required int expectedRevision,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('complete_trip', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+    });
+    return TripWriteResult(
+      id: (payload['trip'] as Map<String, dynamic>)['id'] as String,
+      revision: (payload['revision'] as num).toInt(),
+    );
+  }
+
+  @override
+  Future<TripWriteResult> cancelTrip({
+    required String tripId,
+    required int expectedRevision,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('cancel_trip', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+    });
+    return TripWriteResult(
+      id: (payload['trip'] as Map<String, dynamic>)['id'] as String,
+      revision: (payload['revision'] as num).toInt(),
+    );
+  }
+
+  @override
+  Future<int> deleteTrip({
+    required String tripId,
+    required int expectedRevision,
+    String? idempotencyKey,
+  }) async {
+    _requireSession();
+    final payload = await _rpc('delete_trip', {
+      'p_trip_id': tripId,
+      'p_expected_revision': expectedRevision,
+      'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
+    });
+    return (payload['deleted_count'] as num?)?.toInt() ?? 0;
   }
 
   /// 添加一个行程项。时间以 UTC 序列化，服务端列为 timestamptz。
@@ -661,7 +665,7 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
       final rows = await _client
           .from('trips')
           .select(
-            'id, revision, timezone, start_date, end_date, '
+            'id, revision, timezone, status, start_date, end_date, '
             'trip_days(id, local_date)',
           )
           .order('updated_at', ascending: false)
@@ -725,6 +729,47 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     );
   }
 
+  /// 添加一个地点节点。position 由 [countItemsOnDay] 推导，与 [addBreakItem] 一致。
+  ///
+  /// 快照在此构造而非由调用方传入：`schema_version` 与 `coordinate_system` 是库端
+  /// trigger 校验的固定值（itinerary_schema.sql:243-259），让每个调用方各填一遍
+  /// 迟早有一处填错。
+  @override
+  Future<TripWriteResult> addPlaceItem({
+    required String tripId,
+    required int expectedRevision,
+    required String tripDayId,
+    required String placeId,
+    required String title,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    double? latitude,
+    double? longitude,
+    String? notes,
+    String? idempotencyKey,
+  }) async {
+    final position = await countItemsOnDay(tripDayId);
+    // 坐标成对齐全才写入：库端要求两者同时给出或同时省略，只给其一会被拒。
+    final hasCoordinates = latitude != null && longitude != null;
+    return addTripItem(
+      tripId: tripId,
+      expectedRevision: expectedRevision,
+      tripDayId: tripDayId,
+      title: title,
+      plannedStartAt: plannedStartAt,
+      plannedEndAt: plannedEndAt,
+      timeSlot: timeSlot,
+      position: position,
+      placeId: placeId,
+      placeSnapshot: hasCoordinates
+          ? PlaceSnapshot(name: title, latitude: latitude, longitude: longitude)
+          : PlaceSnapshot(name: title),
+      notes: notes,
+      idempotencyKey: idempotencyKey,
+    );
+  }
+
   /// 统计某一天已有的行程项数，用于推导新项的 position。
   ///
   /// `trip_items` 对 (trip_day_id, position) 有唯一约束（仅非取消项，见
@@ -737,7 +782,7 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
           .from('trip_items')
           .select('id, status')
           .eq('trip_day_id', tripDayId);
-      return rows.where((row) => row['status'] != 'cancelled').length;
+      return rows.length;
     } on PostgrestException catch (error) {
       throw _translate(error);
     } on SocketException catch (_) {
@@ -784,9 +829,6 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     final days =
         [...?(row['trip_days'] as List?)].whereType<Map<String, dynamic>>().map(
           (day) {
-            // 已取消的项仍要展示：用户决策（2026-08-24）是软删除后可见且可恢复，
-            // 过滤掉就没有恢复入口了。排序时沉到当天末尾——它们不占 position
-            // （唯一索引排除 cancelled），混在中间会打乱可执行项的顺序感。
             final items = [
               ...?(day['trip_items'] as List?),
             ].whereType<Map<String, dynamic>>().toList()..sort(_byPosition);
@@ -800,12 +842,6 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
   }
 
   static int _byPosition(Map<String, dynamic> a, Map<String, dynamic> b) {
-    // 已取消的项一律排在后面：它们不参与 position 排序（唯一索引排除 cancelled），
-    // 按 position 混排会让两个不同的项显示为同一位置。
-    final aCancelled = a['status'] == 'cancelled';
-    final bCancelled = b['status'] == 'cancelled';
-    if (aCancelled != bCancelled) return aCancelled ? 1 : -1;
-
     final byPosition = ((a['position'] as num?) ?? 0).compareTo(
       (b['position'] as num?) ?? 0,
     );
@@ -839,6 +875,10 @@ TripRepositoryException translatePostgrestError({
     // 应让用户重新加载后重试，处置方式与前者一致。
     'P0002' || '40001' => const TripRepositoryException(
       '行程已被其他操作更新，请重新加载后再试。',
+      kind: TripRepositoryErrorKind.conflict,
+    ),
+    'P0003' => const TripRepositoryException(
+      '行程已完成，无法再修改。',
       kind: TripRepositoryErrorKind.conflict,
     ),
     '42501' => const TripRepositoryException(
@@ -990,104 +1030,3 @@ class TripRepositoryException implements Exception {
 }
 
 enum TripRepositoryErrorKind { unavailable, unauthenticated, network, conflict }
-
-class DemoTripRepository implements TripRepository {
-  const DemoTripRepository();
-
-  @override
-  Future<List<TripSummary>> listTrips() async {
-    final plan = await loadPlan();
-    if (plan == null) return const [];
-    return [
-      TripSummary(
-        id: plan.id,
-        title: plan.title,
-        startDate: plan.days.first.date,
-        endDate: plan.days.last.date,
-        timezone: plan.timezone,
-        updatedAt: plan.updatedAt,
-      ),
-    ];
-  }
-
-  @override
-  Future<TripPlan?> loadPlan({String? tripId}) async {
-    final day = DateTime(2026, 8, 22);
-    return TripPlan(
-      id: 'demo-shanghai-food-day',
-      title: '上海一日寻味',
-      destination: '上海 · 徐汇与静安',
-      mapState: TripMapState.unavailable,
-      updatedAt: DateTime(2026, 8, 21, 18),
-      days: [
-        TripDay(
-          date: day,
-          label: '周六 · 8 月 22 日',
-          stops: [
-            TripStop(
-              id: 'breakfast',
-              title: '老城隍庙小笼',
-              subtitle: '早餐 · 08:30–09:30',
-              startAt: DateTime(2026, 8, 22, 8, 30),
-              endAt: DateTime(2026, 8, 22, 9, 30),
-              type: TripStopType.breakfast,
-              note: '建议先取号，再沿福佑路慢慢逛过去。',
-            ),
-            TripStop(
-              id: 'lunch',
-              title: '本帮菜午餐',
-              subtitle: '午餐 · 12:00–13:30',
-              startAt: DateTime(2026, 8, 22, 12),
-              endAt: DateTime(2026, 8, 22, 13, 30),
-              type: TripStopType.lunch,
-              isLocked: true,
-              note: '已锁定：保留给第一次来上海的本帮菜体验。',
-            ),
-            TripStop(
-              id: 'snack',
-              title: '安福路咖啡与甜点',
-              subtitle: '下午茶 · 15:00–16:30',
-              startAt: DateTime(2026, 8, 22, 15),
-              endAt: DateTime(2026, 8, 22, 16, 30),
-              type: TripStopType.afternoonTea,
-              note: '留出步行时间，按现场排队情况灵活调整。',
-            ),
-            TripStop(
-              id: 'dinner',
-              title: '夜宵：生煎与排骨年糕',
-              subtitle: '晚餐 · 18:30–20:00',
-              startAt: DateTime(2026, 8, 22, 18, 30),
-              endAt: DateTime(2026, 8, 22, 20),
-              type: TripStopType.dinner,
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-@immutable
-class TripPlanSummary {
-  const TripPlanSummary({required this.plan});
-
-  final TripPlan plan;
-
-  int get stopCount => plan.stopCount;
-
-  Duration get plannedDuration {
-    if (plan.days.isEmpty || plan.days.first.stops.isEmpty) {
-      return Duration.zero;
-    }
-    final stops = plan.days.expand((day) => day.stops).toList(growable: false);
-    final start = stops
-        .map((stop) => stop.startAt)
-        .reduce((a, b) => a.isBefore(b) ? a : b);
-    final end = stops
-        .map((stop) => stop.endAt)
-        .reduce((a, b) => a.isAfter(b) ? a : b);
-    return end.difference(start);
-  }
-
-  double get dayCount => math.max(plan.days.length, 1).toDouble();
-}

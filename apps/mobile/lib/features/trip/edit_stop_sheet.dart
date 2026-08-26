@@ -2,52 +2,56 @@ import 'package:flutter/material.dart';
 
 import 'package:savorseek/app/theme/design_tokens.dart';
 
+import 'schedule_picker_sheet.dart';
 import 'trip_models.dart';
+import 'trip_repository.dart';
 
 /// 编辑节点表单的提交结果。
 @immutable
 class EditStopDraft {
-  const EditStopDraft({required this.title, this.notes});
+  const EditStopDraft({
+    required this.title,
+    required this.selection,
+    this.notes,
+  });
 
   final String title;
+  final ScheduleSelection selection;
 
-  /// 备注。null 表示清空——服务端把 btrim 后的空串归一为 NULL。
-  ///
-  /// 不用「null 表示不改」：清空与不改都会想用 null 表达，二义性只能靠额外哨兵值
-  /// 解决。表单总是把两个字段一起送，因此 null 只有「清空」一个含义。
+  /// null 表示清空备注。
   final String? notes;
 }
 
-/// 弹出编辑节点表单，预填当前标题与备注。用户取消时返回 null。
+/// 弹出编辑节点表单，预填当前标题、备注与排期。用户取消时返回 null。
 ///
-/// 只改标题与备注：时间走改期表单，状态走菜单里的取消/恢复/删除。已完成与已跳过
-/// 的项不可编辑（库端返回 22023），调用方不应为它们给出入口。
+/// 编辑一次提交标题、备注、日期、开始时间与时长；服务端用单个 edit_trip_item
+/// RPC 保证这些字段不会留下半成品。已完成与已跳过的项不可编辑。
 Future<EditStopDraft?> showEditStopSheet(
   BuildContext context, {
   required TripStop stop,
+  required TripSchedulingContext trip,
 }) {
   return showModalBottomSheet<EditStopDraft>(
     context: context,
     isScrollControlled: true,
-    builder: (context) => _EditStopSheet(stop: stop),
+    builder: (context) => _EditStopSheet(stop: stop, trip: trip),
   );
 }
 
 class _EditStopSheet extends StatefulWidget {
-  const _EditStopSheet({required this.stop});
+  const _EditStopSheet({required this.stop, required this.trip});
 
   final TripStop stop;
+  final TripSchedulingContext trip;
 
   @override
   State<_EditStopSheet> createState() => _EditStopSheetState();
 }
 
 class _EditStopSheetState extends State<_EditStopSheet> {
-  /// 标题上限 120，与 `trip_items.title` 的 varchar(120) 一致。
   static const int _titleMaxLength = 120;
-
-  /// 备注上限 1000，与 `trip_items.notes` 的 varchar(1000) 一致。
   static const int _noteMaxLength = 1000;
+  static const List<int> _durationChoices = [30, 60, 90, 120, 180];
 
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _titleController = TextEditingController(
@@ -57,11 +61,50 @@ class _EditStopSheetState extends State<_EditStopSheet> {
     text: widget.stop.note ?? '',
   );
 
+  late TripDayRef _day = _initialDay();
+  late TimeOfDay _time = TimeOfDay(
+    hour: widget.stop.startAt.hour,
+    minute: widget.stop.startAt.minute,
+  );
+  late Duration _duration = widget.stop.endAt.difference(widget.stop.startAt);
+
+  TripDayRef _initialDay() {
+    for (final day in widget.trip.days) {
+      if (day.id == widget.stop.tripDayId) return day;
+    }
+    return widget.trip.days.first;
+  }
+
   @override
   void dispose() {
     _titleController.dispose();
     _noteController.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _day.localDate,
+      firstDate: widget.trip.firstDate,
+      lastDate: widget.trip.lastDate,
+      selectableDayPredicate: (date) => widget.trip.dayOn(date) != null,
+      helpText: '选择行程中的哪一天',
+    );
+    if (picked == null) return;
+    final day = widget.trip.dayOn(picked);
+    if (day == null) return;
+    setState(() => _day = day);
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _time,
+      helpText: '选择开始时间',
+    );
+    if (picked == null) return;
+    setState(() => _time = picked);
   }
 
   void _submit() {
@@ -70,7 +113,12 @@ class _EditStopSheetState extends State<_EditStopSheet> {
     Navigator.of(context).pop(
       EditStopDraft(
         title: _titleController.text.trim(),
-        // 清空备注即传 null，由仓库层转成空串交给服务端归一。
+        selection: ScheduleSelection(
+          day: _day,
+          hour: _time.hour,
+          minute: _time.minute,
+          duration: _duration,
+        ),
         notes: notes.isEmpty ? null : notes,
       ),
     );
@@ -80,10 +128,9 @@ class _EditStopSheetState extends State<_EditStopSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final insets = MediaQuery.viewInsetsOf(context);
-    final isCancelled = widget.stop.status == TripItemStatus.cancelled;
+    final canPickDate = widget.trip.days.length > 1;
 
     return Padding(
-      // 键盘弹出时上推内容，否则输入框被遮住。
       padding: EdgeInsets.only(bottom: insets.bottom),
       child: SafeArea(
         child: SingleChildScrollView(
@@ -97,35 +144,12 @@ class _EditStopSheetState extends State<_EditStopSheet> {
                 Text('编辑节点', style: theme.textTheme.titleLarge),
                 const SizedBox(height: AppTokens.spaceXs),
                 Text(
-                  '修改名称与备注。调整时间请用「改期」。',
+                  '一次修改名称、备注与排期。',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                     height: 1.4,
                   ),
                 ),
-                // 已取消的项仍可编辑，但要说清它当前不在计划内，否则用户会以为
-                // 改完就恢复了。
-                if (isCancelled) ...[
-                  const SizedBox(height: AppTokens.spaceSm),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.event_busy_outlined,
-                        size: 14,
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: AppTokens.spaceXs),
-                      Expanded(
-                        child: Text(
-                          '此项已取消，编辑后仍需「恢复」才会回到计划中。',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
                 const SizedBox(height: AppTokens.spaceLg),
                 TextFormField(
                   controller: _titleController,
@@ -137,12 +161,10 @@ class _EditStopSheetState extends State<_EditStopSheet> {
                     border: OutlineInputBorder(),
                   ),
                   validator: (value) {
-                    // 库端 btrim 后校验非空，这里提前拦住全空格标题，省一次往返。
                     if ((value?.trim() ?? '').isEmpty) return '请填写节点名称';
                     return null;
                   },
                 ),
-                const SizedBox(height: AppTokens.spaceSm),
                 TextFormField(
                   controller: _noteController,
                   maxLength: _noteMaxLength,
@@ -152,6 +174,35 @@ class _EditStopSheetState extends State<_EditStopSheet> {
                     hintText: '清空即删除原备注',
                     border: OutlineInputBorder(),
                   ),
+                ),
+                const SizedBox(height: AppTokens.spaceSm),
+                _PickerTile(
+                  icon: Icons.event_outlined,
+                  label: '日期',
+                  value: formatLocalDate(_day.localDate),
+                  onTap: canPickDate ? _pickDate : null,
+                ),
+                _PickerTile(
+                  icon: Icons.schedule_outlined,
+                  label: '开始时间',
+                  value: formatWallClock(_time.hour, _time.minute),
+                  onTap: _pickTime,
+                ),
+                const SizedBox(height: AppTokens.spaceSm),
+                Text('停留时长', style: theme.textTheme.labelLarge),
+                const SizedBox(height: AppTokens.spaceXs),
+                Wrap(
+                  spacing: AppTokens.spaceSm,
+                  children: [
+                    for (final minutes in _durationChoices)
+                      ChoiceChip(
+                        label: Text(formatDuration(Duration(minutes: minutes))),
+                        selected: _duration.inMinutes == minutes,
+                        onSelected: (_) => setState(
+                          () => _duration = Duration(minutes: minutes),
+                        ),
+                      ),
+                  ],
                 ),
                 const SizedBox(height: AppTokens.spaceMd),
                 Row(
@@ -176,6 +227,32 @@ class _EditStopSheetState extends State<_EditStopSheet> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _PickerTile extends StatelessWidget {
+  const _PickerTile({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(icon),
+      title: Text(label),
+      subtitle: Text(value),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: onTap,
     );
   }
 }

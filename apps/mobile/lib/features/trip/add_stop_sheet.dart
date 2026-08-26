@@ -1,56 +1,66 @@
 import 'package:flutter/material.dart';
 
 import 'package:savorseek/app/theme/design_tokens.dart';
+import 'package:savorseek/features/explore/amap_consent.dart';
+import 'package:savorseek/features/places/place_models.dart';
+import 'package:savorseek/features/places/place_repository.dart';
 
+import 'pick_place_sheet.dart';
 import 'schedule_picker_sheet.dart';
 import 'trip_repository.dart';
 
-/// 添加节点表单的提交结果。
+/// 统一添加入口返回的草稿。
 @immutable
 class AddStopDraft {
-  const AddStopDraft({required this.title, required this.selection, this.note});
+  const AddStopDraft({
+    required this.title,
+    required this.selection,
+    this.place,
+    this.note,
+  });
 
   final String title;
-
-  /// 排在哪一天、几点、停留多久。复用加入行程与改期的同一套排期语义。
   final ScheduleSelection selection;
-
+  final Place? place;
   final String? note;
 }
 
-/// 弹出添加节点表单。用户取消时返回 null。
-///
-/// 节点为 `break` 类型：库端要求地点项必须携带 placeId 与快照，而行程页没有
-/// 地点检索能力。地点节点仍从探索页加入，此处提供的是「预留一段时间」这类
-/// 不依赖具体地点的安排。
+/// 添加一个节点；地点关联是可选的。
 Future<AddStopDraft?> showAddStopSheet(
   BuildContext context, {
   required TripSchedulingContext trip,
+  PlaceRepository? placeRepository,
+  AmapConsent? mapConsent,
 }) {
   return showModalBottomSheet<AddStopDraft>(
     context: context,
     isScrollControlled: true,
-    builder: (context) => _AddStopSheet(trip: trip),
+    builder: (context) => _AddStopSheet(
+      trip: trip,
+      placeRepository: placeRepository,
+      mapConsent: mapConsent,
+    ),
   );
 }
 
 class _AddStopSheet extends StatefulWidget {
-  const _AddStopSheet({required this.trip});
+  const _AddStopSheet({
+    required this.trip,
+    this.placeRepository,
+    this.mapConsent,
+  });
 
   final TripSchedulingContext trip;
+  final PlaceRepository? placeRepository;
+  final AmapConsent? mapConsent;
 
   @override
   State<_AddStopSheet> createState() => _AddStopSheetState();
 }
 
 class _AddStopSheetState extends State<_AddStopSheet> {
-  /// 标题上限 120，与 `trip_items.title` 的 varchar(120) 一致。
   static const int _titleMaxLength = 120;
-
-  /// 备注上限 1000，与 `trip_items.notes` 的 varchar(1000) 一致。
   static const int _noteMaxLength = 1000;
-
-  /// 可选时长，与排期表单保持一致。
   static const List<int> _durationChoices = [30, 60, 90, 120, 180];
 
   final _formKey = GlobalKey<FormState>();
@@ -60,6 +70,7 @@ class _AddStopSheetState extends State<_AddStopSheet> {
   late TripDayRef _day = widget.trip.days.first;
   TimeOfDay _time = const TimeOfDay(hour: 12, minute: 0);
   Duration _duration = const Duration(hours: 1);
+  Place? _place;
 
   @override
   void dispose() {
@@ -68,11 +79,27 @@ class _AddStopSheetState extends State<_AddStopSheet> {
     super.dispose();
   }
 
+  Future<void> _pickPlace() async {
+    final repository = widget.placeRepository;
+    if (repository == null) return;
+    final place = await showPickPlaceSheet(
+      context,
+      placeRepository: repository,
+      consent: widget.mapConsent,
+    );
+    if (place == null || !mounted) return;
+    setState(() {
+      _place = place;
+      if (_titleController.text.trim().isEmpty) {
+        _titleController.text = place.name;
+      }
+    });
+  }
+
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
       context: context,
       initialDate: _day.localDate,
-      // 只允许行程既有的日期：库端要求对应 trip_day 必须已存在。
       firstDate: widget.trip.firstDate,
       lastDate: widget.trip.lastDate,
       selectableDayPredicate: (date) => widget.trip.dayOn(date) != null,
@@ -106,6 +133,7 @@ class _AddStopSheetState extends State<_AddStopSheet> {
           minute: _time.minute,
           duration: _duration,
         ),
+        place: _place,
         note: note.isEmpty ? null : note,
       ),
     );
@@ -118,7 +146,6 @@ class _AddStopSheetState extends State<_AddStopSheet> {
     final canPickDate = widget.trip.days.length > 1;
 
     return Padding(
-      // 键盘弹出时上推内容，否则输入框被遮住。
       padding: EdgeInsets.only(bottom: insets.bottom),
       child: SafeArea(
         child: SingleChildScrollView(
@@ -132,17 +159,36 @@ class _AddStopSheetState extends State<_AddStopSheet> {
                 Text('添加行程节点', style: theme.textTheme.titleLarge),
                 const SizedBox(height: AppTokens.spaceXs),
                 Text(
-                  '用于预留时间、休息或自定义安排。要加入某家店，请在探索页选择地点。',
+                  '可关联一个地点；不关联时就是自由安排节点。',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                     height: 1.4,
                   ),
                 ),
-                const SizedBox(height: AppTokens.spaceLg),
+                const SizedBox(height: AppTokens.spaceMd),
+                if (widget.placeRepository != null)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      _place == null
+                          ? Icons.add_location_alt_outlined
+                          : Icons.place_outlined,
+                    ),
+                    title: Text(_place?.name ?? '关联地点（可选）'),
+                    subtitle: Text(_place == null ? '搜索并选择地点' : '点击更换地点'),
+                    trailing: _place == null
+                        ? const Icon(Icons.chevron_right)
+                        : IconButton(
+                            tooltip: '清除地点',
+                            onPressed: () => setState(() => _place = null),
+                            icon: const Icon(Icons.clear),
+                          ),
+                    onTap: _pickPlace,
+                  ),
                 TextFormField(
                   controller: _titleController,
                   maxLength: _titleMaxLength,
-                  autofocus: true,
+                  autofocus: widget.placeRepository == null,
                   textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(
                     labelText: '节点名称',
@@ -150,7 +196,6 @@ class _AddStopSheetState extends State<_AddStopSheet> {
                     border: OutlineInputBorder(),
                   ),
                   validator: (value) {
-                    // 库端 btrim 后校验非空，这里提前拦住全空格标题，省一次往返。
                     if ((value?.trim() ?? '').isEmpty) return '请填写节点名称';
                     return null;
                   },
@@ -159,7 +204,6 @@ class _AddStopSheetState extends State<_AddStopSheet> {
                   icon: Icons.event_outlined,
                   label: '日期',
                   value: formatLocalDate(_day.localDate),
-                  // 单日行程无从选择，禁用比给一个只有一个选项的弹窗更诚实。
                   onTap: canPickDate ? _pickDate : null,
                 ),
                 const Divider(height: 1),
@@ -174,15 +218,16 @@ class _AddStopSheetState extends State<_AddStopSheet> {
                 const SizedBox(height: AppTokens.spaceSm),
                 Wrap(
                   spacing: AppTokens.spaceSm,
-                  children: _durationChoices.map((minutes) {
-                    return ChoiceChip(
-                      label: Text(formatDuration(Duration(minutes: minutes))),
-                      selected: _duration.inMinutes == minutes,
-                      onSelected: (_) => setState(
-                        () => _duration = Duration(minutes: minutes),
+                  children: [
+                    for (final minutes in _durationChoices)
+                      ChoiceChip(
+                        label: Text(formatDuration(Duration(minutes: minutes))),
+                        selected: _duration.inMinutes == minutes,
+                        onSelected: (_) => setState(
+                          () => _duration = Duration(minutes: minutes),
+                        ),
                       ),
-                    );
-                  }).toList(),
+                  ],
                 ),
                 const SizedBox(height: AppTokens.spaceMd),
                 TextFormField(
@@ -238,7 +283,6 @@ class _PickerTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final enabled = onTap != null;
-
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(AppTokens.radiusSm),

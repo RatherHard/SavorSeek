@@ -91,7 +91,7 @@ void main() {
     expect(find.text('已选 2 项'), findsOneWidget);
   });
 
-  testWidgets('批量取消一次调用带上全部 id 与同一个 revision', (tester) async {
+  testWidgets('批量删除一次调用带上全部 id 与同一个 revision', (tester) async {
     final repository = buildRepository();
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
@@ -99,22 +99,25 @@ void main() {
     await tester.tap(find.text('烧烤店').last);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.tap(find.widgetWithText(TextButton, '删除'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
     await tester.pumpAndSettle();
 
-    // 关键断言：一次调用，而不是两次各带一个 id。
     expect(repository.calls.length, 1);
-    expect(repository.calls.single['op'], 'batchCancel');
+    expect(repository.calls.single['op'], 'batchDelete');
     expect(repository.calls.single['ids'], 'item-1,item-2');
     expect(repository.calls.single['expectedRevision'], 7);
   });
 
-  testWidgets('批量取消后退出多选态', (tester) async {
+  testWidgets('批量删除后退出多选态', (tester) async {
     await tester.pumpWidget(wrap(buildRepository()));
     await tester.pumpAndSettle();
     await enterSelection(tester);
 
-    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.tap(find.widgetWithText(TextButton, '删除'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('已选'), findsNothing);
@@ -168,7 +171,9 @@ void main() {
     await tester.pumpAndSettle();
     await enterSelection(tester);
 
-    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.tap(find.widgetWithText(TextButton, '删除'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('请重新加载后再试'), findsOneWidget);

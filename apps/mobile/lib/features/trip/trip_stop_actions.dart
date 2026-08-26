@@ -131,36 +131,6 @@ class TripStopActions {
     );
   }
 
-  Future<void> cancel({required TripPlan plan, required TripStop stop}) {
-    return _run(
-      (writer) => writer.cancelTripItem(
-        tripId: plan.id,
-        expectedRevision: plan.revision,
-        tripItemId: stop.id,
-      ),
-      success: '已取消：${stop.title}',
-      // 取消的逆操作即恢复，无需额外快照。
-      undo: TripUndo(
-        (writer, revision) => writer.restoreTripItem(
-          tripId: plan.id,
-          expectedRevision: revision,
-          tripItemId: stop.id,
-        ),
-      ),
-    );
-  }
-
-  Future<void> restore({required TripPlan plan, required TripStop stop}) {
-    return _run(
-      (writer) => writer.restoreTripItem(
-        tripId: plan.id,
-        expectedRevision: plan.revision,
-        tripItemId: stop.id,
-      ),
-      success: '已恢复：${stop.title}',
-    );
-  }
-
   /// 硬删除。二次确认由 UI 负责，此处只执行。
   ///
   /// 不提供撤销：记录已不存在，无从恢复。
@@ -175,47 +145,14 @@ class TripStopActions {
     );
   }
 
-  /// 批量取消。
-  ///
-  /// 走批量 RPC 而非循环单项：每次单项写入都会自增 revision，循环到第二次时手里
-  /// 的 expected_revision 已过期，必然收到 P0002。
-  Future<void> batchCancel({
-    required TripPlan plan,
-    required List<String> stopIds,
-  }) {
-    final ids = List<String>.unmodifiable(stopIds);
-    if (ids.isEmpty) return Future<void>.value();
-    return _run(
-      (writer) => writer.batchCancelTripItems(
-        tripId: plan.id,
-        expectedRevision: plan.revision,
-        tripItemIds: ids,
-      ),
-      success: '已取消 ${ids.length} 个行程项',
-      undo: TripUndo((writer, revision) async {
-        // 恢复是批量的例外：restore_trip_item 没有批量版，必须逐项调用，且每次用
-        // 上一次返回的 revision 往下走——沿用同一个值会从第二项起报 P0002。
-        var next = revision;
-        for (final id in ids) {
-          final result = await writer.restoreTripItem(
-            tripId: plan.id,
-            expectedRevision: next,
-            tripItemId: id,
-          );
-          next = result.revision;
-        }
-      }),
-    );
-  }
-
   /// 批量硬删除。二次确认由 UI 负责。
-  Future<void> batchDelete({
+  Future<bool> batchDelete({
     required TripPlan plan,
     required List<String> stopIds,
   }) {
     final ids = List<String>.unmodifiable(stopIds);
-    if (ids.isEmpty) return Future<void>.value();
-    return _run(
+    if (ids.isEmpty) return Future<bool>.value(false);
+    return _runResult(
       (writer) => writer.batchDeleteTripItems(
         tripId: plan.id,
         expectedRevision: plan.revision,
@@ -290,35 +227,125 @@ class TripStopActions {
     );
   }
 
-  /// 修改节点的标题与备注。
-  Future<void> updateItem({
+  /// 添加一个地点节点。
+  ///
+  /// 与 [addBreak] 的差别只在坐标：地点节点带 `place_snapshot`，因此能上地图。
+  /// [latitude] / [longitude] 为空时仍会写入，只是该节点不参与路线绘制。
+  Future<void> addPlace({
+    required TripPlan plan,
+    required String tripDayId,
+    required DateTime dayDate,
+    required String placeId,
+    required String title,
+    required int hour,
+    required int minute,
+    required Duration duration,
+    required TripStopType timeSlot,
+    double? latitude,
+    double? longitude,
+    String? notes,
+  }) async {
+    // 新项的 id 只能从写入结果取得，故用可变量在写入闭包与撤销闭包之间传递。
+    String? createdId;
+    await _run(
+      (writer) async {
+        final start = _instant(
+          localDate: dayDate,
+          timezone: plan.timezone,
+          hour: hour,
+          minute: minute,
+        );
+        final result = await writer.addPlaceItem(
+          tripId: plan.id,
+          expectedRevision: plan.revision,
+          tripDayId: tripDayId,
+          placeId: placeId,
+          title: title,
+          plannedStartAt: start,
+          plannedEndAt: start.add(duration),
+          timeSlot: timeSlot,
+          latitude: latitude,
+          longitude: longitude,
+          notes: notes,
+        );
+        createdId = result.id;
+        return result;
+      },
+      success: '已加入行程：$title',
+      // 逆操作是删除刚建的那一项。
+      undo: TripUndo((writer, revision) async {
+        final id = createdId;
+        if (id == null) return;
+        await writer.deleteTripItem(
+          tripId: plan.id,
+          expectedRevision: revision,
+          tripItemId: id,
+        );
+      }),
+    );
+  }
+
+  /// 一次修改节点的标题、备注、日期、时间与时长。
+  Future<void> editStop({
     required TripPlan plan,
     required TripStop stop,
+    required String currentDayId,
+    required DateTime currentDayDate,
+    required String targetDayId,
+    required DateTime targetDayDate,
+    required int hour,
+    required int minute,
+    required Duration duration,
+    required TripStopType timeSlot,
     required String title,
     String? notes,
-  }) {
-    // 逆操作是把原值写回，原值必须在写入前取。
+  }) async {
     final originalTitle = stop.title;
     final originalNotes = stop.note;
+    final originalStart = stop.startAt;
+    final originalDuration = stop.endAt.difference(stop.startAt);
+    final originalType = stop.type;
 
-    return _run(
-      (writer) => writer.updateTripItem(
-        tripId: plan.id,
-        expectedRevision: plan.revision,
-        tripItemId: stop.id,
-        title: title,
-        notes: notes,
-      ),
+    await _run(
+      (writer) {
+        final start = _instant(
+          localDate: targetDayDate,
+          timezone: plan.timezone,
+          hour: hour,
+          minute: minute,
+        );
+        return writer.editTripItem(
+          tripId: plan.id,
+          expectedRevision: plan.revision,
+          tripItemId: stop.id,
+          title: title,
+          notes: notes,
+          tripDayId: targetDayId,
+          plannedStartAt: start,
+          plannedEndAt: start.add(duration),
+          timeSlot: timeSlot,
+        );
+      },
       success: '已更新：$title',
-      undo: TripUndo(
-        (writer, revision) => writer.updateTripItem(
+      undo: TripUndo((writer, revision) {
+        final start = _instant(
+          localDate: currentDayDate,
+          timezone: plan.timezone,
+          hour: originalStart.hour,
+          minute: originalStart.minute,
+        );
+        return writer.editTripItem(
           tripId: plan.id,
           expectedRevision: revision,
           tripItemId: stop.id,
           title: originalTitle,
           notes: originalNotes,
-        ),
-      ),
+          tripDayId: currentDayId,
+          plannedStartAt: start,
+          plannedEndAt: start.add(originalDuration),
+          timeSlot: originalType,
+        );
+      }),
     );
   }
 
@@ -359,6 +386,26 @@ class TripStopActions {
       if (error.kind == TripRepositoryErrorKind.conflict) await reload();
     } on TripTimeZoneException catch (error) {
       _emit(TripActionFailed(error.toString()));
+    } finally {
+      _isBusy.value = false;
+    }
+  }
+
+  Future<bool> _runResult(
+    Future<Object?> Function(TripWriter writer) write, {
+    required String success,
+  }) async {
+    if (_isBusy.value) return false;
+    _isBusy.value = true;
+    try {
+      await write(writer);
+      await reload();
+      _emit(TripActionSucceeded(success));
+      return true;
+    } on TripRepositoryException catch (error) {
+      _emit(TripActionFailed(error.message));
+      if (error.kind == TripRepositoryErrorKind.conflict) await reload();
+      return false;
     } finally {
       _isBusy.value = false;
     }

@@ -44,20 +44,28 @@ class TripListController extends ChangeNotifier {
   final TripRepository _repository;
   TripListState _state = const TripListLoading();
   bool _isDisposed = false;
+  int _loadGeneration = 0;
 
   TripListState get state => _state;
 
   Future<void> load() async {
+    final generation = ++_loadGeneration;
     _setState(const TripListLoading());
     try {
       final trips = await _repository.listTrips();
+      if (!_isCurrent(generation)) return;
       _setState(trips.isEmpty ? const TripListEmpty() : TripListLoaded(trips));
     } on TripRepositoryException catch (error) {
+      if (!_isCurrent(generation)) return;
       _setState(TripListError(error.message, kind: error.kind));
     } on Exception {
+      if (!_isCurrent(generation)) return;
       _setState(const TripListError('行程服务暂时不可用，请稍后重试。'));
     }
   }
+
+  bool _isCurrent(int generation) =>
+      !_isDisposed && generation == _loadGeneration;
 
   @override
   void dispose() {

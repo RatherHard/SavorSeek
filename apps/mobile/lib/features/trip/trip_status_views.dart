@@ -180,20 +180,27 @@ class TripDetailGoneView extends StatelessWidget {
   }
 }
 
-/// 无法绘制路线时的占位图。
+/// 无法呈现地图时的占位图。
 ///
-/// 说明为何没有地图，而不是显示一张只有一个点的图。
+/// 说明为何没有地图，并给出补齐的办法。此前文案是「地图接入后会显示路线」，
+/// 暗示地图能力尚未开发；真实原因是这份行程里还没有任何带坐标的地点节点，
+/// 两者要用户做的事完全不同。
 class TripMapFallback extends StatelessWidget {
-  const TripMapFallback({super.key, required this.state});
+  const TripMapFallback({super.key, required this.state, this.onAddPlace});
 
   final TripMapState state;
+
+  /// 添加地点节点。为空时只说明原因不给按钮——点了没反应比没有按钮更糟。
+  final VoidCallback? onAddPlace;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final isUnavailable = state == TripMapState.unavailable;
+    final showAction = isUnavailable && onAddPlace != null;
     return Container(
-      height: 156,
+      // 多出按钮就要多给高度：固定 156 时按钮会把内容挤出 10px 而溢出。
+      height: showAction ? 188 : 156,
       decoration: BoxDecoration(
         color: scheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(AppTokens.radiusMd),
@@ -213,22 +220,33 @@ class TripMapFallback extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(
-                    isUnavailable ? Icons.map_outlined : Icons.map,
+                    isUnavailable ? Icons.add_location_alt_outlined : Icons.map,
                     color: scheme.primary,
-                    size: 30,
+                    size: 28,
                   ),
                   const SizedBox(height: AppTokens.spaceSm),
                   Text(
-                    isUnavailable ? '地图路线暂不可用' : '路线地图',
+                    isUnavailable ? '还没有地点节点' : '路线地图',
                     style: Theme.of(context).textTheme.titleSmall,
                   ),
                   const SizedBox(height: AppTokens.spaceXs),
                   Text(
-                    isUnavailable ? '时间表仍可正常查看，地图接入后会显示路线。' : '查看地点之间的移动顺序与距离。',
+                    isUnavailable
+                        ? '自由安排节点没有位置信息，加入一家店即可在地图上看到它。'
+                        : '查看地点之间的移动顺序与距离。',
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodySmall
                         ?.copyWith(color: scheme.onSurfaceVariant),
                   ),
+                  if (showAction)
+                    Padding(
+                      padding: const EdgeInsets.only(top: AppTokens.spaceSm),
+                      child: FilledButton.tonalIcon(
+                        onPressed: onAddPlace,
+                        icon: const Icon(Icons.search, size: 18),
+                        label: const Text('添加地点'),
+                      ),
+                    ),
                 ],
               ),
             ),

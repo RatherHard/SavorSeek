@@ -29,12 +29,26 @@ enum TripItemType {
   final String wireName;
 }
 
+/// 行程生命周期状态，对应 `trips.status` 的 check 约束。
+enum TripStatus {
+  draft('draft'),
+  confirmed('confirmed'),
+  inProgress('in_progress'),
+  completed('completed'),
+  cancelled('cancelled');
+
+  const TripStatus(this.wireName);
+
+  final String wireName;
+
+  bool get isTerminal => this == completed || this == cancelled;
+}
+
 /// 行程项状态，对应 `trip_items.status` 的 check 约束。
 enum TripItemStatus {
   planned('planned'),
   completed('completed'),
-  skipped('skipped'),
-  cancelled('cancelled');
+  skipped('skipped');
 
   const TripItemStatus(this.wireName);
 
@@ -186,6 +200,7 @@ class TripPlan {
     this.updatedAt,
     this.timezone = 'Asia/Shanghai',
     this.revision = 1,
+    this.status = TripStatus.draft,
   }) : days = List.unmodifiable(days);
 
   final String id;
@@ -201,23 +216,33 @@ class TripPlan {
   /// 乐观并发控制的修订号，改期时作为 expected_revision。
   final int revision;
 
+  /// 行程生命周期状态。
+  final TripStatus status;
+
   int get stopCount => days.fold(0, (count, day) => count + day.stops.length);
 
   /// 按时间顺序排列的、可在地图上定位的节点。
   ///
-  /// 已取消的项排除在外：它们不在计划路线上，画进去会让路线绕行到一个用户已经
-  /// 决定不去的点。跨天的节点连成一条线——行程本身就是按天顺序推进的。
+  /// 所有计划内节点都参与路线；节点级取消已由数据库状态约束移除。
   List<TripStop> get routeStops {
     return [
       for (final day in days)
         for (final stop in day.stops)
-          if (stop.hasCoordinates && stop.status != TripItemStatus.cancelled)
-            stop,
+          if (stop.hasCoordinates) stop,
     ];
   }
 
-  /// 地图能否绘制路线。至少要两个可定位节点才谈得上「路径」。
-  bool get hasRoute => routeStops.length >= 2;
+  /// 地图能否呈现这份行程。一个可定位节点就够。
+  ///
+  /// 不要求两个：只有一个地点时地图仍有信息量（它在城市的哪一侧、离住处多远），
+  /// 拿占位图盖掉它等于把已有的信息藏起来。能否画连线是另一回事，见
+  /// [hasRouteLine]。
+  bool get hasRoute => routeStops.isNotEmpty;
+
+  /// 能否画出连线。至少要两个可定位节点才谈得上「路径」。
+  ///
+  /// 与 [hasRoute] 分开：地图该不该出现、线该不该画，是两个不同的判断。
+  bool get hasRouteLine => routeStops.length >= 2;
 
   TripPlan copyWith({
     String? id,
@@ -228,6 +253,7 @@ class TripPlan {
     DateTime? updatedAt,
     String? timezone,
     int? revision,
+    TripStatus? status,
   }) {
     return TripPlan(
       id: id ?? this.id,
@@ -238,6 +264,9 @@ class TripPlan {
       updatedAt: updatedAt ?? this.updatedAt,
       timezone: timezone ?? this.timezone,
       revision: revision ?? this.revision,
+      status: status ?? this.status,
     );
   }
+
+  bool get isReadOnly => status == TripStatus.completed;
 }

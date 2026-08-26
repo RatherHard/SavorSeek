@@ -6,12 +6,14 @@ import 'package:savorseek/app/theme/design_tokens.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 import 'package:savorseek/features/auth/auth_sheet.dart';
 import 'package:savorseek/features/explore/amap_consent.dart';
+import 'package:savorseek/features/places/place_repository.dart';
 
-import 'add_stop_sheet.dart';
 import 'edit_stop_sheet.dart';
-import 'schedule_picker_sheet.dart';
+import 'add_stop_sheet.dart';
 import 'timezone_picker_sheet.dart';
 import 'trip_controller.dart';
+import 'trip_lifecycle_actions.dart';
+import 'trip_lifecycle_menu.dart';
 import 'trip_models.dart';
 import 'trip_repository.dart';
 import 'trip_route_map.dart';
@@ -21,11 +23,6 @@ import 'trip_status_views.dart';
 import 'trip_stop_actions.dart';
 import 'trip_time_zone.dart';
 import 'trip_timeline.dart';
-
-/// 行程级操作，作用于整个行程而非单个项。
-///
-/// 不含「新建行程」：那是列表层面的操作，已移到一级页面。
-enum TripAction { changeTimezone }
 
 /// 行程二级页面：查看与编辑单个行程的节点。
 ///
@@ -40,6 +37,7 @@ class TripDetailPage extends StatefulWidget {
     this.auth,
     this.mapConsent,
     this.routeService,
+    this.placeRepository,
   });
 
   final TripRepository repository;
@@ -56,6 +54,12 @@ class TripDetailPage extends StatefulWidget {
   /// 真实路网路线来源。为空时地图退化为直线连接。
   final TripRouteService? routeService;
 
+  /// 地点检索能力。为空时不提供「添加地点」入口。
+  ///
+  /// 地点节点是路线能成立的前提——只有它带坐标。此前唯一入口在探索页，用户在行程
+  /// 里发现缺一家店时得先离开行程去搜索再切回来。
+  final PlaceRepository? placeRepository;
+
   @override
   State<TripDetailPage> createState() => _TripDetailPageState();
 }
@@ -66,7 +70,11 @@ class _TripDetailPageState extends State<TripDetailPage> {
     tripId: widget.tripId,
   );
 
-  /// 写入编排。仅在仓库具备写入能力时创建。
+  /// 行程级写入编排，与节点动作分开管理。
+  TripLifecycleActions? _lifecycleActions;
+  StreamSubscription<TripActionOutcome>? _lifecycleOutcomeSubscription;
+
+  /// 节点写入编排。
   TripStopActions? _actions;
   StreamSubscription<TripActionOutcome>? _outcomeSubscription;
   StreamSubscription<String?>? _authSubscription;
@@ -83,16 +91,25 @@ class _TripDetailPageState extends State<TripDetailPage> {
 
     final repository = widget.repository;
     if (repository is TripWriter) {
+      final writer = repository as TripWriter;
       final actions = TripStopActions(
         // 显式转换而非依赖类型提升：promotion 不跨越 TripStopActions 内部持有的
         // 闭包边界保留，写成 as 更直白也更稳定。
-        writer: repository as TripWriter,
+        writer: writer,
         reload: _controller.load,
       );
       // 结果统一在此变成提示条：SnackBar 需要 context，而编排层刻意不持有它。
       _outcomeSubscription = actions.outcomes.listen(_onOutcome);
       actions.isBusy.addListener(_onStateChanged);
       _actions = actions;
+
+      final lifecycle = TripLifecycleActions(
+        writer: writer,
+        reload: _controller.load,
+      );
+      _lifecycleOutcomeSubscription = lifecycle.outcomes.listen(_onOutcome);
+      lifecycle.isBusy.addListener(_onStateChanged);
+      _lifecycleActions = lifecycle;
     }
 
     // 行程数据是用户私有的，登出后仍留在屏幕上不合适。详情页与列表页都订阅：
@@ -107,8 +124,11 @@ class _TripDetailPageState extends State<TripDetailPage> {
   void dispose() {
     _authSubscription?.cancel();
     _outcomeSubscription?.cancel();
+    _lifecycleOutcomeSubscription?.cancel();
     _actions?.isBusy.removeListener(_onStateChanged);
+    _lifecycleActions?.isBusy.removeListener(_onStateChanged);
     _actions?.dispose();
+    _lifecycleActions?.dispose();
     _controller
       ..removeListener(_onStateChanged)
       ..dispose();
@@ -148,6 +168,28 @@ class _TripDetailPageState extends State<TripDetailPage> {
     _actions?.undo(undo, currentRevision: state.plan.revision);
   }
 
+  Future<void> _completeTrip(TripPlan plan) async {
+    final lifecycle = _lifecycleActions;
+    if (lifecycle == null) return;
+    if (!await confirmCompleteTrip(context)) return;
+    await lifecycle.complete(plan: plan);
+  }
+
+  Future<void> _cancelTrip(TripPlan plan) async {
+    final lifecycle = _lifecycleActions;
+    if (lifecycle == null) return;
+    await lifecycle.cancel(plan: plan);
+  }
+
+  Future<void> _deleteTrip(TripPlan plan) async {
+    final lifecycle = _lifecycleActions;
+    if (lifecycle == null) return;
+    if (!await confirmDeleteTrip(context, plan.title)) return;
+    if (await lifecycle.delete(plan: plan) && mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
   Future<void> _signIn() async {
     final auth = widget.auth;
     if (auth == null) return;
@@ -176,91 +218,47 @@ class _TripDetailPageState extends State<TripDetailPage> {
     final actions = _actions;
     if (actions == null) return;
     switch (action) {
-      case StopAction.reschedule:
-        await _reschedule(actions, plan, day, stop);
       case StopAction.edit:
-        await _edit(actions, plan, stop);
-      case StopAction.cancel:
-        await actions.cancel(plan: plan, stop: stop);
-      case StopAction.restore:
-        await actions.restore(plan: plan, stop: stop);
+        await _edit(actions, plan, day, stop);
       case StopAction.delete:
-        // 硬删除不可恢复，必须二次确认。取消同样能让项从计划中消失，
-        // 且可反悔，因此确认框里把这条区别讲清楚。
         final confirmed = await _confirmDelete(stop);
         if (!confirmed || !mounted) return;
         await actions.delete(plan: plan, stop: stop);
     }
   }
 
-  /// 改期。
-  ///
-  /// [TripStop.startAt] 已是行程时区下的墙上时间（见 TripMapper），可直接作为
-  /// 选择器初值，无需再做时区换算——若此处再折算一次就会双重偏移。
-  Future<void> _reschedule(
+  /// 编辑节点的标题、备注与排期。
+  Future<void> _edit(
     TripStopActions actions,
     TripPlan plan,
     TripDay day,
     TripStop stop,
   ) async {
-    final dayId = day.id ?? stop.tripDayId;
-    if (dayId == null) return;
-
-    // 行程的全部日期都可作为目标，跨天移动由服务端重算 position。
-    final days = plan.days
-        .where((item) => item.id != null)
-        .map((item) => TripDayRef(id: item.id!, localDate: item.date))
-        .toList(growable: false);
+    final days = _dayRefsOf(plan);
     if (days.isEmpty) return;
-
-    final current = days.firstWhere(
-      (item) => item.id == dayId,
-      orElse: () => days.first,
-    );
-    final selection = await showSchedulePickerSheet(
+    final draft = await showEditStopSheet(
       context,
-      placeName: stop.title,
+      stop: stop,
       trip: TripSchedulingContext(
         tripId: plan.id,
         revision: plan.revision,
         timezone: plan.timezone,
         days: days,
       ),
-      isReschedule: true,
-      initial: ScheduleSelection(
-        day: current,
-        hour: stop.startAt.hour,
-        minute: stop.startAt.minute,
-        duration: stop.endAt.difference(stop.startAt),
-      ),
     );
-    if (selection == null || !mounted) return;
-
-    await actions.reschedule(
-      plan: plan,
-      stop: stop,
-      currentDayId: dayId,
-      currentDayDate: current.localDate,
-      targetDayId: selection.day.id,
-      targetDayDate: selection.day.localDate,
-      hour: selection.hour,
-      minute: selection.minute,
-      duration: selection.duration,
-      timeSlot: selection.timeSlot,
-    );
-  }
-
-  /// 编辑节点的标题与备注。
-  Future<void> _edit(
-    TripStopActions actions,
-    TripPlan plan,
-    TripStop stop,
-  ) async {
-    final draft = await showEditStopSheet(context, stop: stop);
     if (draft == null || !mounted) return;
-    await actions.updateItem(
+
+    await actions.editStop(
       plan: plan,
       stop: stop,
+      currentDayId: day.id ?? stop.tripDayId ?? draft.selection.day.id,
+      currentDayDate: day.date,
+      targetDayId: draft.selection.day.id,
+      targetDayDate: draft.selection.day.localDate,
+      hour: draft.selection.hour,
+      minute: draft.selection.minute,
+      duration: draft.selection.duration,
+      timeSlot: draft.selection.timeSlot,
       title: draft.title,
       notes: draft.notes,
     );
@@ -271,10 +269,7 @@ class _TripDetailPageState extends State<TripDetailPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('删除这个行程项？'),
-        content: Text(
-          '「${stop.title}」将被彻底删除，无法恢复。\n'
-          '若只是暂时不想去，改用「取消」可以保留记录并随时恢复。',
-        ),
+        content: Text('「${stop.title}」将被彻底删除，无法恢复。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -293,21 +288,17 @@ class _TripDetailPageState extends State<TripDetailPage> {
     return confirmed ?? false;
   }
 
-  /// 批量取消或删除已选项。
-  Future<void> _runBatch(TripPlan plan, {required bool isDelete}) async {
+  /// 批量删除已选项。
+  Future<void> _runBatch(TripPlan plan) async {
     final actions = _actions;
     if (actions == null) return;
     final ids = _selectedStopIds.toList(growable: false);
     if (ids.isEmpty) return;
 
-    if (isDelete) {
-      final confirmed = await _confirmBatchDelete(ids.length);
-      if (!confirmed || !mounted) return;
-      await actions.batchDelete(plan: plan, stopIds: ids);
-    } else {
-      await actions.batchCancel(plan: plan, stopIds: ids);
-    }
-    _clearSelection();
+    final confirmed = await _confirmBatchDelete(ids.length);
+    if (!confirmed || !mounted) return;
+    final succeeded = await actions.batchDelete(plan: plan, stopIds: ids);
+    if (succeeded && mounted) _clearSelection();
   }
 
   Future<bool> _confirmBatchDelete(int count) async {
@@ -342,10 +333,7 @@ class _TripDetailPageState extends State<TripDetailPage> {
     final actions = _actions;
     if (actions == null) return;
 
-    final days = plan.days
-        .where((item) => item.id != null)
-        .map((item) => TripDayRef(id: item.id!, localDate: item.date))
-        .toList(growable: false);
+    final days = _dayRefsOf(plan);
     if (days.isEmpty) {
       _showMessage('行程还没有可安排的日期。');
       return;
@@ -359,20 +347,48 @@ class _TripDetailPageState extends State<TripDetailPage> {
         timezone: plan.timezone,
         days: days,
       ),
+      placeRepository: widget.placeRepository,
+      mapConsent: widget.mapConsent,
     );
     if (draft == null || !mounted) return;
 
-    await actions.addBreak(
+    final place = draft.place;
+    if (place == null) {
+      await actions.addBreak(
+        plan: plan,
+        tripDayId: draft.selection.day.id,
+        dayDate: draft.selection.day.localDate,
+        title: draft.title,
+        hour: draft.selection.hour,
+        minute: draft.selection.minute,
+        duration: draft.selection.duration,
+        timeSlot: draft.selection.timeSlot,
+        notes: draft.note,
+      );
+      return;
+    }
+    await actions.addPlace(
       plan: plan,
       tripDayId: draft.selection.day.id,
       dayDate: draft.selection.day.localDate,
+      placeId: place.id,
       title: draft.title,
+      latitude: place.latitude,
+      longitude: place.longitude,
       hour: draft.selection.hour,
       minute: draft.selection.minute,
       duration: draft.selection.duration,
       timeSlot: draft.selection.timeSlot,
       notes: draft.note,
     );
+  }
+
+  /// 行程中可供排期的日期。缺 id 的天来自演示数据，无法作为写入目标。
+  List<TripDayRef> _dayRefsOf(TripPlan plan) {
+    return plan.days
+        .where((item) => item.id != null)
+        .map((item) => TripDayRef(id: item.id!, localDate: item.date))
+        .toList(growable: false);
   }
 
   /// 更改行程时区。
@@ -416,24 +432,15 @@ class _TripDetailPageState extends State<TripDetailPage> {
         // 标题取自已载入的行程；未载入时不猜，显示通用文案比显示错的好。
         title: Text(state is TripLoaded ? state.plan.title : '行程'),
         actions: [
-          if (state is TripLoaded && _actions != null)
-            PopupMenuButton<TripAction>(
-              tooltip: '行程操作',
-              icon: const Icon(Icons.more_horiz),
+          if (state is TripLoaded && _lifecycleActions != null)
+            TripLifecycleMenu(
+              plan: state.plan,
               onSelected: (action) => switch (action) {
                 TripAction.changeTimezone => _changeTimezone(state.plan),
+                TripAction.complete => _completeTrip(state.plan),
+                TripAction.cancel => _cancelTrip(state.plan),
+                TripAction.delete => _deleteTrip(state.plan),
               },
-              itemBuilder: (context) => [
-                const PopupMenuItem(
-                  value: TripAction.changeTimezone,
-                  child: ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.public),
-                    title: Text('更改行程时区'),
-                  ),
-                ),
-              ],
             ),
         ],
       ),
@@ -465,21 +472,24 @@ class _TripDetailPageState extends State<TripDetailPage> {
             TripLoaded(:final plan) => _TripDetail(
               key: const ValueKey('loaded'),
               plan: plan,
-              onStopAction: _actions == null
+              onStopAction: _actions == null || plan.isReadOnly
                   ? null
                   : (day, stop, action) =>
                         _handleStopAction(plan, day, stop, action),
-              onAddStop: _actions == null ? null : () => _addStop(plan),
+              onAddStop: _actions == null || plan.isReadOnly
+                  ? null
+                  : () => _addStop(plan),
               mapConsent: widget.mapConsent,
               routeService: widget.routeService,
               onOpenRoute: widget.mapConsent == null
                   ? null
                   : () => _openRoute(plan),
-              selectedStopIds: _selectedStopIds,
-              onToggleSelection: _actions == null ? null : _toggleSelection,
-              onClearSelection: _clearSelection,
-              onBatchCancel: () => _runBatch(plan, isDelete: false),
-              onBatchDelete: () => _runBatch(plan, isDelete: true),
+              selectedStopIds: plan.isReadOnly ? const {} : _selectedStopIds,
+              onToggleSelection: _actions == null || plan.isReadOnly
+                  ? null
+                  : _toggleSelection,
+              onClearSelection: plan.isReadOnly ? null : _clearSelection,
+              onBatchDelete: plan.isReadOnly ? null : () => _runBatch(plan),
             ),
           },
         ),
@@ -501,7 +511,6 @@ class _TripDetail extends StatelessWidget {
     this.selectedStopIds = const {},
     this.onToggleSelection,
     this.onClearSelection,
-    this.onBatchCancel,
     this.onBatchDelete,
   });
 
@@ -523,7 +532,6 @@ class _TripDetail extends StatelessWidget {
   final Set<String> selectedStopIds;
   final ValueChanged<TripStop>? onToggleSelection;
   final VoidCallback? onClearSelection;
-  final VoidCallback? onBatchCancel;
   final VoidCallback? onBatchDelete;
 
   bool get _isSelecting => selectedStopIds.isNotEmpty;
@@ -547,7 +555,6 @@ class _TripDetail extends StatelessWidget {
             bottom: AppTokens.spaceMd,
             child: _BatchActionBar(
               count: selectedStopIds.length,
-              onCancelSelected: onBatchCancel,
               onDeleteSelected: onBatchDelete,
               onExit: onClearSelection,
             ),
@@ -581,8 +588,7 @@ class _TripDetail extends StatelessWidget {
         SliverPadding(
           padding: const EdgeInsets.symmetric(horizontal: AppTokens.spaceMd),
           sliver: SliverToBoxAdapter(
-            // 有两个以上可定位节点才画路线；否则说明为何没有地图，
-            // 而不是显示一张只有一个点的图。
+            // 没有坐标节点时的退化说明仍可提供添加入口；统一入口会同时支持地点与普通节点。
             child: plan.hasRoute && mapConsent != null
                 ? TripRouteMap(
                     plan: plan,
@@ -590,7 +596,7 @@ class _TripDetail extends StatelessWidget {
                     routeService: routeService,
                     onTap: onOpenRoute,
                   )
-                : TripMapFallback(state: plan.mapState),
+                : TripMapFallback(state: plan.mapState, onAddPlace: onAddStop),
           ),
         ),
         SliverPadding(
@@ -692,13 +698,11 @@ class _TripHeader extends StatelessWidget {
 class _BatchActionBar extends StatelessWidget {
   const _BatchActionBar({
     required this.count,
-    this.onCancelSelected,
     this.onDeleteSelected,
     this.onExit,
   });
 
   final int count;
-  final VoidCallback? onCancelSelected;
   final VoidCallback? onDeleteSelected;
   final VoidCallback? onExit;
 
@@ -726,11 +730,6 @@ class _BatchActionBar extends StatelessWidget {
                 '已选 $count 项',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
-            ),
-            TextButton.icon(
-              onPressed: onCancelSelected,
-              icon: const Icon(Icons.event_busy_outlined, size: 18),
-              label: const Text('取消'),
             ),
             TextButton.icon(
               onPressed: onDeleteSelected,

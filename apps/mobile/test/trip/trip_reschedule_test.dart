@@ -40,6 +40,7 @@ class FakeWritableRepository implements TripRepository, TripWriter {
       startDate: plan.days.first.date,
       endDate: plan.days.last.date,
       timezone: plan.timezone,
+      status: plan.status,
     );
     return [
       summarize(_plan),
@@ -75,27 +76,29 @@ class FakeWritableRepository implements TripRepository, TripWriter {
   }
 
   @override
-  Future<TripWriteResult> cancelTripItem({
+  Future<TripWriteResult> editTripItem({
     required String tripId,
     required int expectedRevision,
     required String tripItemId,
+    required String title,
+    String? notes,
+    required String tripDayId,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
     String? idempotencyKey,
   }) async {
-    calls.add({'op': 'cancel', 'tripItemId': tripItemId});
-    final failure = error;
-    if (failure != null) throw failure;
-    _plan = _plan.copyWith(revision: _plan.revision + 1);
-    return TripWriteResult(id: tripItemId, revision: _plan.revision);
-  }
-
-  @override
-  Future<TripWriteResult> restoreTripItem({
-    required String tripId,
-    required int expectedRevision,
-    required String tripItemId,
-    String? idempotencyKey,
-  }) async {
-    calls.add({'op': 'restore', 'tripItemId': tripItemId});
+    calls.add({
+      'op': 'edit',
+      'tripItemId': tripItemId,
+      'tripDayId': tripDayId,
+      'title': title,
+      'notes': notes,
+      'expectedRevision': expectedRevision,
+      'startUtc': plannedStartAt.toUtc().toIso8601String(),
+      'endUtc': plannedEndAt.toUtc().toIso8601String(),
+      'timeSlot': timeSlot.wireName,
+    });
     final failure = error;
     if (failure != null) throw failure;
     _plan = _plan.copyWith(revision: _plan.revision + 1);
@@ -195,37 +198,44 @@ class FakeWritableRepository implements TripRepository, TripWriter {
   }
 
   @override
-  Future<int> countItemsOnDay(String tripDayId) async {
-    for (final day in _plan.days) {
-      if (day.id == tripDayId) {
-        return day.stops
-            .where((stop) => stop.status != TripItemStatus.cancelled)
-            .length;
-      }
-    }
-    return 0;
-  }
-
-  @override
-  Future<TripBatchResult> batchCancelTripItems({
+  Future<TripWriteResult> addPlaceItem({
     required String tripId,
     required int expectedRevision,
-    required List<String> tripItemIds,
+    required String tripDayId,
+    required String placeId,
+    required String title,
+    required DateTime plannedStartAt,
+    required DateTime plannedEndAt,
+    required TripStopType timeSlot,
+    double? latitude,
+    double? longitude,
+    String? notes,
     String? idempotencyKey,
   }) async {
     calls.add({
-      'op': 'batchCancel',
-      'ids': tripItemIds.join(','),
-      'expectedRevision': expectedRevision,
+      'op': 'addPlace',
+      'tripDayId': tripDayId,
+      'placeId': placeId,
+      'title': title,
+      'startUtc': plannedStartAt.toUtc().toIso8601String(),
+      'endUtc': plannedEndAt.toUtc().toIso8601String(),
+      'timeSlot': timeSlot.wireName,
+      'latitude': latitude,
+      'longitude': longitude,
+      'notes': notes,
     });
     final failure = error;
     if (failure != null) throw failure;
-    // 批量只递增一次，与库端一致。
     _plan = _plan.copyWith(revision: _plan.revision + 1);
-    return TripBatchResult(
-      affectedCount: tripItemIds.length,
-      revision: _plan.revision,
-    );
+    return TripWriteResult(id: 'new-place-item', revision: _plan.revision);
+  }
+
+  @override
+  Future<int> countItemsOnDay(String tripDayId) async {
+    for (final day in _plan.days) {
+      if (day.id == tripDayId) return day.stops.length;
+    }
+    return 0;
   }
 
   @override
@@ -247,6 +257,50 @@ class FakeWritableRepository implements TripRepository, TripWriter {
       affectedCount: tripItemIds.length,
       revision: _plan.revision,
     );
+  }
+
+  @override
+  Future<TripWriteResult> completeTrip({
+    required String tripId,
+    required int expectedRevision,
+    String? idempotencyKey,
+  }) async {
+    calls.add({'op': 'completeTrip', 'expectedRevision': expectedRevision});
+    final failure = error;
+    if (failure != null) throw failure;
+    _plan = _plan.copyWith(
+      revision: _plan.revision + 1,
+      status: TripStatus.completed,
+    );
+    return TripWriteResult(id: tripId, revision: _plan.revision);
+  }
+
+  @override
+  Future<TripWriteResult> cancelTrip({
+    required String tripId,
+    required int expectedRevision,
+    String? idempotencyKey,
+  }) async {
+    calls.add({'op': 'cancelTrip', 'expectedRevision': expectedRevision});
+    final failure = error;
+    if (failure != null) throw failure;
+    _plan = _plan.copyWith(
+      revision: _plan.revision + 1,
+      status: TripStatus.cancelled,
+    );
+    return TripWriteResult(id: tripId, revision: _plan.revision);
+  }
+
+  @override
+  Future<int> deleteTrip({
+    required String tripId,
+    required int expectedRevision,
+    String? idempotencyKey,
+  }) async {
+    calls.add({'op': 'deleteTrip', 'expectedRevision': expectedRevision});
+    final failure = error;
+    if (failure != null) throw failure;
+    return 1;
   }
 
   /// 当前行程，供测试断言写入后的状态。
@@ -334,11 +388,13 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.more_vert));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('改期'));
+    await tester.tap(find.text('编辑'));
     await tester.pumpAndSettle();
 
-    expect(find.text('调整到店时间'), findsOneWidget);
-    expect(find.text('保存改期'), findsOneWidget);
+    expect(find.text('编辑节点'), findsOneWidget);
+    expect(find.text('一次修改名称、备注与排期。'), findsOneWidget);
+    expect(find.text('保存'), findsOneWidget);
+
     // 初值取自当前排期。19:00 在时间轴与表单中各出现一次（表单浮于列表之上），
     // 故用 findsWidgets；日期只在表单内出现。
     expect(find.text('19:00'), findsWidgets);
@@ -354,9 +410,9 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.more_vert));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('改期'));
+    await tester.tap(find.text('编辑'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('保存改期'));
+    await tester.tap(find.text('保存'));
     await tester.pumpAndSettle();
 
     expect(repository.calls, hasLength(1));
@@ -381,9 +437,9 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.more_vert));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('改期'));
+    await tester.tap(find.text('编辑'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('保存改期'));
+    await tester.tap(find.text('保存'));
     await tester.pump();
 
     expect(find.textContaining('请重新加载'), findsOneWidget);
@@ -396,7 +452,7 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.more_vert));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('改期'));
+    await tester.tap(find.text('编辑'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();

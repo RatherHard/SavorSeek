@@ -8,6 +8,7 @@ import 'package:savorseek/features/trip/trip_detail_page.dart';
 import 'package:savorseek/features/trip/trip_list_page.dart';
 import 'package:savorseek/features/trip/trip_models.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
+import 'package:savorseek/features/trip/trip_repository_fakes.dart';
 import 'package:savorseek/features/trip/trip_time_zone.dart';
 
 /// 一级页面：行程列表的四态渲染与进入详情。
@@ -41,7 +42,9 @@ void main() {
   // 外层包 Scaffold：本页由 AppShell 的 Scaffold 承载（自身不带），
   // 提示条需要一个后代 Scaffold 才能呈现。
   Widget wrap(TripRepository repository, {AuthService? auth}) => MaterialApp(
-    home: Scaffold(body: TripListPage(repository: repository, auth: auth)),
+    home: Scaffold(
+      body: TripListPage(repository: repository, auth: auth),
+    ),
   );
 
   testWidgets('无行程时给出创建引导', (tester) async {
@@ -154,10 +157,7 @@ void main() {
 
     await tester.tap(find.text('新建行程'));
     await tester.pumpAndSettle();
-    await tester.enterText(
-      find.widgetWithText(TextFormField, '行程标题'),
-      '失败的行程',
-    );
+    await tester.enterText(find.widgetWithText(TextFormField, '行程标题'), '失败的行程');
     await tester.tap(find.widgetWithText(FilledButton, '创建行程'));
     await tester.pumpAndSettle();
 

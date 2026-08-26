@@ -8,6 +8,7 @@ import 'package:savorseek/features/trip/trip_detail_page.dart';
 import 'package:savorseek/features/trip/trip_mapper.dart';
 import 'package:savorseek/features/trip/trip_models.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
+import 'package:savorseek/features/trip/trip_repository_fakes.dart';
 import 'package:savorseek/features/trip/trip_time_zone.dart';
 
 import 'trip_reschedule_test.dart' show FakeWritableRepository;
@@ -57,8 +58,8 @@ void main() {
 
     // 标题在 AppBar 上，由本页自己提供（本页盖住了 AppShell 的主导航）。
     expect(find.text('杭州一日寻味'), findsOneWidget);
-    // 可定位节点不足两个，故不画路线而是说明原因。
-    expect(find.text('地图路线暂不可用'), findsOneWidget);
+    // 一个可定位节点都没有，故说明缺的是地点而非地图能力。
+    expect(find.text('还没有地点节点'), findsOneWidget);
     expect(find.text('片儿川'), findsWidgets);
     expect(find.byIcon(Icons.lock_outline), findsOneWidget);
   });
@@ -137,10 +138,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('编辑'), findsOneWidget);
-    expect(find.text('改名称与备注'), findsOneWidget);
+    expect(find.text('改名称、备注与排期'), findsOneWidget);
   });
 
-  testWidgets('编辑表单提交后调用 updateTripItem', (tester) async {
+  testWidgets('编辑表单提交后调用 editTripItem', (tester) async {
     final repository = FakeWritableRepository(buildPlan());
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
@@ -160,7 +161,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final call = repository.calls.single;
-    expect(call['op'], 'updateItem');
+    expect(call['op'], 'edit');
     expect(call['tripItemId'], 'item-1');
     expect(call['title'], '片儿川（换一家）');
     expect(call['expectedRevision'], 2);
@@ -230,10 +231,16 @@ class _FakeAuthService implements AuthService {
   String? get currentEmail => null;
 
   @override
-  Future<void> signIn({required String email, required String password}) async {}
+  Future<void> signIn({
+    required String email,
+    required String password,
+  }) async {}
 
   @override
-  Future<void> signUp({required String email, required String password}) async {}
+  Future<void> signUp({
+    required String email,
+    required String password,
+  }) async {}
 
   @override
   Future<void> signOut() async {}

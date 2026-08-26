@@ -14,7 +14,7 @@ import 'package:savorseek/features/explore/explore_page.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 import 'package:savorseek/features/mine/mine_page.dart';
 import 'package:savorseek/features/trip/trip_list_page.dart';
-import 'package:savorseek/features/trip/trip_repository.dart';
+import 'package:savorseek/features/trip/trip_repository_fakes.dart';
 
 /// 后端未配置形态：与 SavorSeekApp 缺省依赖一致，使断言不依赖真实网络。
 const AppDependencies _offlineDependencies = AppDependencies(

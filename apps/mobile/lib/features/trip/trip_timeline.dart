@@ -5,7 +5,7 @@ import 'package:savorseek/app/theme/design_tokens.dart';
 import 'trip_models.dart';
 
 /// 行程项可执行的操作。
-enum StopAction { reschedule, edit, cancel, restore, delete }
+enum StopAction { edit, delete }
 
 /// 一天的时间轴。
 ///
@@ -51,11 +51,7 @@ class TripDayTimeline extends StatelessWidget {
                       : () => onToggleSelection!(entry.value))
                 : (onStopAction == null || !entry.value.canReschedule
                       ? null
-                      : () => onStopAction!(
-                          day,
-                          entry.value,
-                          StopAction.reschedule,
-                        )),
+                      : () => onStopAction!(day, entry.value, StopAction.edit)),
             // 长按进入多选：这是列表多选的通用手势，不必额外给一个「选择」按钮。
             onLongPress: onToggleSelection == null
                 ? null
@@ -177,7 +173,6 @@ class _StopCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final isCancelled = stop.status == TripItemStatus.cancelled;
     return Card(
       margin: const EdgeInsets.only(bottom: AppTokens.spaceSm),
       elevation: 0,
@@ -218,21 +213,9 @@ class _StopCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       stop.title,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        // 已取消的项加删除线：一眼可辨，且不必读文字就知道状态。
-                        decoration: isCancelled
-                            ? TextDecoration.lineThrough
-                            : null,
-                        color: isCancelled ? scheme.onSurfaceVariant : null,
-                      ),
+                      style: Theme.of(context).textTheme.titleSmall,
                     ),
                   ),
-                  if (isCancelled)
-                    Text(
-                      '已取消',
-                      style: Theme.of(context).textTheme.labelSmall
-                          ?.copyWith(color: scheme.onSurfaceVariant),
-                    ),
                   if (stop.isLocked)
                     Icon(Icons.lock_outline, size: 17, color: scheme.primary),
                   if (onMenuAction != null) ...[
@@ -244,10 +227,8 @@ class _StopCard extends StatelessWidget {
               const SizedBox(height: AppTokens.spaceXs),
               Text(
                 stop.subtitle,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                  decoration: isCancelled ? TextDecoration.lineThrough : null,
-                ),
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: scheme.onSurfaceVariant),
               ),
               if (stop.note case final note?) ...[
                 const SizedBox(height: AppTokens.spaceSm),
@@ -277,8 +258,7 @@ class _StopMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isCancelled = stop.status == TripItemStatus.cancelled;
-    // 已完成/已跳过的项是历史事实，库端拒绝任何变更（含改标题），故不给菜单。
+    // 已完成 / 已跳过的项是历史事实，库端拒绝任何变更，故不给菜单。
     if (stop.status == TripItemStatus.completed ||
         stop.status == TripItemStatus.skipped) {
       return const SizedBox.shrink();
@@ -289,17 +269,6 @@ class _StopMenu extends StatelessWidget {
       tooltip: '行程项操作',
       icon: const Icon(Icons.more_vert, size: 18),
       itemBuilder: (context) => [
-        if (!isCancelled)
-          const PopupMenuItem(
-            value: StopAction.reschedule,
-            child: ListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.edit_calendar_outlined),
-              title: Text('改期'),
-            ),
-          ),
-        // 已取消的项也可编辑：它还可能被恢复，恢复前顺手改备注是合理的。
         const PopupMenuItem(
           value: StopAction.edit,
           child: ListTile(
@@ -307,30 +276,9 @@ class _StopMenu extends StatelessWidget {
             contentPadding: EdgeInsets.zero,
             leading: Icon(Icons.edit_outlined),
             title: Text('编辑'),
-            subtitle: Text('改名称与备注'),
+            subtitle: Text('改名称、备注与排期'),
           ),
         ),
-        if (!isCancelled)
-          const PopupMenuItem(
-            value: StopAction.cancel,
-            child: ListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.event_busy_outlined),
-              title: Text('取消'),
-              subtitle: Text('保留记录，可恢复'),
-            ),
-          )
-        else
-          const PopupMenuItem(
-            value: StopAction.restore,
-            child: ListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.restore),
-              title: Text('恢复'),
-            ),
-          ),
         const PopupMenuItem(
           value: StopAction.delete,
           child: ListTile(
