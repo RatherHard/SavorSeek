@@ -6,6 +6,7 @@ import 'package:savorseek/features/explore/amap_consent.dart';
 import 'package:savorseek/features/places/place_repository.dart';
 import 'package:savorseek/features/trip/add_place_to_trip.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
+import 'package:savorseek/features/trip/trip_repository_fakes.dart';
 import 'package:savorseek/features/trip/trip_route_service.dart';
 
 /// 应用级依赖集合，在 `runApp` 前一次性组装。

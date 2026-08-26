@@ -11,6 +11,7 @@ import 'package:savorseek/features/places/place_repository.dart';
 import 'create_trip_sheet.dart';
 import 'trip_detail_page.dart';
 import 'trip_list_controller.dart';
+import 'trip_models.dart';
 import 'trip_repository.dart';
 import 'trip_route_service.dart';
 import 'trip_status_views.dart';
@@ -148,9 +149,8 @@ class _TripListPageState extends State<TripListPage> {
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.maybeOf(
-      context,
-    )?.showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -271,6 +271,30 @@ class _TripList extends StatelessWidget {
   }
 }
 
+class _TripStatusBadge extends StatelessWidget {
+  const _TripStatusBadge({required this.status});
+
+  final TripStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, color) = switch (status) {
+      TripStatus.draft => (
+        '草稿',
+        Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
+      TripStatus.confirmed => ('已确认', Theme.of(context).colorScheme.primary),
+      TripStatus.inProgress => ('进行中', Theme.of(context).colorScheme.primary),
+      TripStatus.completed => ('已完成', Theme.of(context).colorScheme.tertiary),
+      TripStatus.cancelled => ('已取消', Theme.of(context).colorScheme.error),
+    };
+    return Text(
+      label,
+      style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
+    );
+  }
+}
+
 class _TripCard extends StatelessWidget {
   const _TripCard({required this.trip, required this.onTap});
 
@@ -313,7 +337,18 @@ class _TripCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(trip.title, style: theme.textTheme.titleMedium),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            trip.title,
+                            style: theme.textTheme.titleMedium,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        _TripStatusBadge(status: trip.status),
+                      ],
+                    ),
                     const SizedBox(height: AppTokens.spaceXs),
                     Text(
                       '${_formatDate(trip.startDate)} – '

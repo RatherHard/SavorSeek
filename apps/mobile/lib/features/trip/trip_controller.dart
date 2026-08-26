@@ -54,21 +54,29 @@ class TripController extends ChangeNotifier {
 
   TripViewState _state = const TripLoading();
   bool _isDisposed = false;
+  int _loadGeneration = 0;
 
   TripViewState get state => _state;
 
   Future<void> load() async {
+    final generation = ++_loadGeneration;
     _setState(const TripLoading());
     try {
       final plan = await _repository.loadPlan(tripId: tripId);
+      if (!_isCurrent(generation)) return;
       // null 意味着这个行程没了，而不是用户没有行程——详情页据此提示并给出返回出口。
       _setState(plan == null ? const TripDetailGone() : TripLoaded(plan));
     } on TripRepositoryException catch (error) {
+      if (!_isCurrent(generation)) return;
       _setState(TripError(error.message, kind: error.kind));
     } on Exception {
+      if (!_isCurrent(generation)) return;
       _setState(const TripError('行程服务暂时不可用，请稍后重试。'));
     }
   }
+
+  bool _isCurrent(int generation) =>
+      !_isDisposed && generation == _loadGeneration;
 
   @override
   void dispose() {

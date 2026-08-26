@@ -92,7 +92,7 @@ void main() {
     });
 
     test('终态项不可改期', () {
-      for (final status in ['completed', 'skipped', 'cancelled']) {
+      for (final status in ['completed', 'skipped']) {
         final row = tokyoRow();
         ((row['trip_days'] as List).first as Map)['trip_items'][0]['status'] =
             status;

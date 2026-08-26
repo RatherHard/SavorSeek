@@ -6,6 +6,7 @@ import 'package:savorseek/features/places/place_repository.dart';
 import 'package:savorseek/features/trip/trip_mapper.dart';
 import 'package:savorseek/features/trip/trip_detail_page.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
+import 'package:savorseek/features/trip/trip_repository_fakes.dart';
 import 'package:savorseek/features/trip/trip_time_zone.dart';
 
 import 'trip_reschedule_test.dart' show FakeWritableRepository;
@@ -137,22 +138,21 @@ void main() {
           ),
         );
 
-    testWidgets('未注入地点检索能力时不给出入口', (tester) async {
-      // 点了没有反应比没有按钮更糟。
+    testWidgets('未注入地点检索能力时仍只有统一添加节点入口', (tester) async {
       await tester.pumpWidget(wrap(buildRepository()));
       await tester.pumpAndSettle();
 
       expect(find.byTooltip('添加地点'), findsNothing);
+      expect(find.text('添加节点'), findsOneWidget);
     });
 
-    testWidgets('注入后与添加节点入口并存', (tester) async {
+    testWidgets('注入后地点搜索收进统一添加表单', (tester) async {
       await tester.pumpWidget(
         wrapWithPlaces(buildRepository(), _FakePlaceRepository()),
       );
       await tester.pumpAndSettle();
 
-      expect(find.byTooltip('添加地点'), findsOneWidget);
-      // 两个入口互不取代：自由安排节点仍要能加。
+      expect(find.byTooltip('添加地点'), findsNothing);
       expect(find.text('添加节点'), findsOneWidget);
     });
 
@@ -164,16 +164,26 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byTooltip('添加地点'));
+      await tester.tap(find.text('添加节点'));
       await tester.pumpAndSettle();
-      await tester.enterText(find.byType(TextField).first, '海鲜');
+      await tester.tap(find.text('关联地点（可选）'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is TextField && widget.decoration?.labelText == '搜索地点',
+        ),
+        '海鲜',
+      );
       await tester.testTextInput.receiveAction(TextInputAction.search);
       await tester.pumpAndSettle();
 
       await tester.tap(find.text('渔家海鲜'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.widgetWithText(FilledButton, '加入行程'));
+      await tester.tap(find.text('确认地点'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, '添加'));
       await tester.pumpAndSettle();
 
       final call = repository.calls.single;
@@ -201,9 +211,17 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byTooltip('添加地点'));
+      await tester.tap(find.text('添加节点'));
       await tester.pumpAndSettle();
-      await tester.enterText(find.byType(TextField).first, '海鲜');
+      await tester.tap(find.text('关联地点（可选）'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is TextField && widget.decoration?.labelText == '搜索地点',
+        ),
+        '海鲜',
+      );
       await tester.testTextInput.receiveAction(TextInputAction.search);
       await tester.pumpAndSettle();
 
@@ -221,9 +239,17 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byTooltip('添加地点'));
+      await tester.tap(find.text('添加节点'));
       await tester.pumpAndSettle();
-      await tester.enterText(find.byType(TextField).first, '不存在的店');
+      await tester.tap(find.text('关联地点（可选）'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is TextField && widget.decoration?.labelText == '搜索地点',
+        ),
+        '不存在的店',
+      );
       await tester.testTextInput.receiveAction(TextInputAction.search);
       await tester.pumpAndSettle();
 

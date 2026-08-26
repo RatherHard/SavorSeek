@@ -1,12 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:savorseek/features/trip/trip_controller.dart';
 import 'package:savorseek/features/trip/trip_models.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
+import 'package:savorseek/features/trip/trip_repository_fakes.dart';
 
 /// 单个行程的详情控制器。
-///
-/// 构造时即绑定 tripId：行程的选择由一级页面负责，本控制器只服务那一个。
 void main() {
   TripPlan buildPlan({String id = 'trip-1'}) => TripPlan(
     id: id,
@@ -32,8 +33,6 @@ void main() {
 
   group('TripController', () {
     test('读不到目标行程时进入 TripDetailGone 而非空态', () async {
-      // 详情页只服务一个已知 id，读不到只可能是它没了。此时显示「暂无行程」
-      // 是误导——那是「用户还没有行程」的文案，属于列表页。
       final controller = TripController(
         const InMemoryTripRepository(),
         tripId: 'trip-missing',
@@ -59,7 +58,6 @@ void main() {
     });
 
     test('把 tripId 透传给仓库', () async {
-      // 若不透传，详情页会拿到「最近更新的那个行程」而不是用户点的那个。
       final repository = _RecordingRepository(buildPlan(id: 'trip-b'));
       final controller = TripController(repository, tripId: 'trip-b');
       addTearDown(controller.dispose);
@@ -94,6 +92,25 @@ void main() {
         TripRepositoryErrorKind.unauthenticated,
       );
     });
+
+    test('旧请求完成后不会覆盖更新一代的结果', () async {
+      final repository = _DeferredRepository(buildPlan());
+      final controller = TripController(repository, tripId: 'trip-1');
+      addTearDown(controller.dispose);
+
+      final firstLoad = controller.load();
+      await repository.firstStarted.future;
+      final secondLoad = controller.load();
+      await repository.secondStarted.future;
+
+      repository.completeSecond(buildPlan(id: 'trip-2'));
+      await secondLoad;
+      expect((controller.state as TripLoaded).plan.id, 'trip-2');
+
+      repository.completeFirst(buildPlan(id: 'trip-1'));
+      await firstLoad;
+      expect((controller.state as TripLoaded).plan.id, 'trip-2');
+    });
   });
 
   test('trip collections are immutable snapshots', () {
@@ -124,7 +141,6 @@ void main() {
   });
 }
 
-/// 记录 loadPlan 收到的 tripId，用于验证透传。
 class _RecordingRepository implements TripRepository {
   _RecordingRepository(this.plan);
 
@@ -135,6 +151,34 @@ class _RecordingRepository implements TripRepository {
   Future<TripPlan?> loadPlan({String? tripId}) async {
     requestedTripIds.add(tripId);
     return tripId == plan.id ? plan : null;
+  }
+
+  @override
+  Future<List<TripSummary>> listTrips() async => const [];
+}
+
+class _DeferredRepository implements TripRepository {
+  _DeferredRepository(this.plan);
+
+  final TripPlan plan;
+  final firstStarted = Completer<void>();
+  final secondStarted = Completer<void>();
+  final _firstResult = Completer<TripPlan?>();
+  final _secondResult = Completer<TripPlan?>();
+  var _calls = 0;
+
+  void completeFirst(TripPlan plan) => _firstResult.complete(plan);
+  void completeSecond(TripPlan plan) => _secondResult.complete(plan);
+
+  @override
+  Future<TripPlan?> loadPlan({String? tripId}) {
+    _calls++;
+    if (_calls == 1) {
+      firstStarted.complete();
+      return _firstResult.future;
+    }
+    secondStarted.complete();
+    return _secondResult.future;
   }
 
   @override

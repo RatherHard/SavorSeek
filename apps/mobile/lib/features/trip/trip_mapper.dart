@@ -23,6 +23,7 @@ abstract final class TripMapper {
       updatedAt: _parseTimestamp(row['updated_at']),
       timezone: timezone,
       revision: (row['revision'] as num?)?.toInt() ?? 1,
+      status: tripStatusFromWire(row['status'] as String?),
       days: days,
     );
     // 地图可用性由数据决定而非另行传入：少于两个可定位节点时没有「路径」可画，
@@ -97,6 +98,13 @@ abstract final class TripMapper {
     if (value is num) return value.toDouble();
     if (value is String) return double.tryParse(value);
     return null;
+  }
+
+  static TripStatus tripStatusFromWire(String? wire) {
+    for (final value in TripStatus.values) {
+      if (value.wireName == wire) return value;
+    }
+    return TripStatus.draft;
   }
 
   static TripItemStatus statusFromWire(String? wire) {

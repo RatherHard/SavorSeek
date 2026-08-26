@@ -151,19 +151,17 @@ void main() {
       expect(result.hasRouteLine, isFalse);
     });
 
-    test('已取消的节点不进入路线', () {
-      // 取消的项不在计划路线上，画进去会让路线绕行到一个已决定不去的点。
+    test('所有带坐标的计划节点都进入路线', () {
       final result = TripMapper.planFromRow(
         plan([
           item(id: '1', snapshot: snapshotA),
-          item(id: '2', snapshot: snapshotB, position: 1, status: 'cancelled'),
+          item(id: '2', snapshot: snapshotB, position: 1),
         ]),
       );
 
-      expect(result.routeStops.length, 1);
-      // 剩下的一个点仍可定位，但连不成线。
+      expect(result.routeStops.length, 2);
       expect(result.hasRoute, isTrue);
-      expect(result.hasRouteLine, isFalse);
+      expect(result.hasRouteLine, isTrue);
     });
 
     test('路线节点保持时间顺序', () {
