@@ -11,10 +11,10 @@ import 'package:savorseek/features/places/place_repository.dart';
 import 'create_trip_sheet.dart';
 import 'trip_detail_page.dart';
 import 'trip_list_controller.dart';
-import 'trip_models.dart';
 import 'trip_repository.dart';
 import 'trip_route_service.dart';
 import 'trip_status_views.dart';
+import 'trip_temporal_status.dart';
 
 /// 行程一级页面：选择要查看的行程。
 ///
@@ -272,25 +272,23 @@ class _TripList extends StatelessWidget {
 }
 
 class _TripStatusBadge extends StatelessWidget {
-  const _TripStatusBadge({required this.status});
+  const _TripStatusBadge({required this.trip});
 
-  final TripStatus status;
+  final TripSummary trip;
 
   @override
   Widget build(BuildContext context) {
-    final (label, color) = switch (status) {
-      TripStatus.draft => (
-        '草稿',
-        Theme.of(context).colorScheme.onSurfaceVariant,
-      ),
-      TripStatus.confirmed => ('已确认', Theme.of(context).colorScheme.primary),
-      TripStatus.inProgress => ('进行中', Theme.of(context).colorScheme.primary),
-      TripStatus.completed => ('已完成', Theme.of(context).colorScheme.tertiary),
-      TripStatus.cancelled => ('已取消', Theme.of(context).colorScheme.error),
-    };
+    final status = resolveTripDisplayStatus(
+      persistedStatus: trip.status,
+      startDate: trip.startDate,
+      endDate: trip.endDate,
+      timezone: trip.timezone,
+      now: DateTime.now().toUtc(),
+    );
     return Text(
-      label,
-      style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
+      tripDisplayStatusLabel(status),
+      style: Theme.of(context).textTheme.labelSmall
+          ?.copyWith(color: tripDisplayStatusColor(context, status)),
     );
   }
 }
@@ -346,7 +344,7 @@ class _TripCard extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        _TripStatusBadge(status: trip.status),
+                        _TripStatusBadge(trip: trip),
                       ],
                     ),
                     const SizedBox(height: AppTokens.spaceXs),

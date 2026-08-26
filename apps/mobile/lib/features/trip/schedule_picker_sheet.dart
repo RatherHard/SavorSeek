@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:savorseek/app/theme/design_tokens.dart';
 
 import 'trip_models.dart';
+import 'trip_duration_picker.dart';
 import 'trip_repository.dart';
 import 'trip_time_zone.dart';
 
@@ -107,11 +108,11 @@ class _SchedulePickerSheet extends StatefulWidget {
 
 class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
   /// 可选时长，覆盖一顿快餐到一场长饭局。
-  static const List<int> _durationChoices = [30, 60, 90, 120, 180];
+  static const Duration _defaultDuration = defaultTripStopDuration;
 
   late TripDayRef _day;
   late TimeOfDay _time;
-  Duration _duration = const Duration(hours: 1);
+  Duration _duration = _defaultDuration;
 
   @override
   void initState() {
@@ -122,7 +123,7 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
     _time = initial == null
         ? const TimeOfDay(hour: 12, minute: 0)
         : TimeOfDay(hour: initial.hour, minute: initial.minute);
-    _duration = initial?.duration ?? const Duration(hours: 1);
+    _duration = initial?.duration ?? _defaultDuration;
   }
 
   Future<void> _pickDate() async {
@@ -152,7 +153,17 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
     setState(() => _time = picked);
   }
 
+  Future<void> _pickDuration() async {
+    final picked = await showTripDurationPicker(
+      context,
+      initialDuration: _duration,
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _duration = picked);
+  }
+
   void _submit() {
+    if (_duration < minimumTripStopDuration) return;
     Navigator.of(context).pop(
       ScheduleSelection(
         day: _day,
@@ -197,8 +208,14 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final slot = timeSlotForHour(_time.hour);
-    final endMinutes = _time.hour * 60 + _time.minute + _duration.inMinutes;
     final canPickDate = widget.trip.days.length > 1;
+    final scheduleRange = formatScheduleRange(
+      localDate: _day.localDate,
+      hour: _time.hour,
+      minute: _time.minute,
+      duration: _duration,
+      timezone: widget.trip.timezone,
+    );
 
     return SafeArea(
       child: Padding(
@@ -236,19 +253,11 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
               value: formatWallClock(_time.hour, _time.minute),
               onTap: _pickTime,
             ),
-            const SizedBox(height: AppTokens.spaceMd),
-            Text('停留时长', style: theme.textTheme.labelLarge),
-            const SizedBox(height: AppTokens.spaceSm),
-            Wrap(
-              spacing: AppTokens.spaceSm,
-              children: _durationChoices.map((minutes) {
-                return ChoiceChip(
-                  label: Text(formatDuration(Duration(minutes: minutes))),
-                  selected: _duration.inMinutes == minutes,
-                  onSelected: (_) =>
-                      setState(() => _duration = Duration(minutes: minutes)),
-                );
-              }).toList(),
+            _PickerRow(
+              icon: Icons.timer_outlined,
+              label: '停留时长',
+              value: formatTripStopDuration(_duration),
+              onTap: _pickDuration,
             ),
             const SizedBox(height: AppTokens.spaceMd),
             // 时段由时间推导，显式告知结果，避免「为什么被归到夜宵」的困惑。
@@ -260,10 +269,7 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
                 borderRadius: BorderRadius.circular(AppTokens.radiusMd),
               ),
               child: Text(
-                '将排入「${timeSlotLabel(slot)}」时段，'
-                '${formatWallClock(_time.hour, _time.minute)}–'
-                '${formatWallClock((endMinutes ~/ 60) % 24, endMinutes % 60)}'
-                '${endMinutes >= 24 * 60 ? '（次日）' : ''}',
+                '将排入「${timeSlotLabel(slot)}」时段，$scheduleRange',
                 style: theme.textTheme.bodySmall,
               ),
             ),
@@ -328,13 +334,7 @@ String formatWallClock(int hour, int minute) {
       '${minute.toString().padLeft(2, '0')}';
 }
 
-String formatDuration(Duration duration) {
-  final minutes = duration.inMinutes;
-  if (minutes < 60) return '$minutes 分钟';
-  final hours = minutes ~/ 60;
-  final rest = minutes % 60;
-  return rest == 0 ? '$hours 小时' : '$hours 小时 $rest 分';
-}
+String formatDuration(Duration duration) => formatTripStopDuration(duration);
 
 class _PickerRow extends StatelessWidget {
   const _PickerRow({

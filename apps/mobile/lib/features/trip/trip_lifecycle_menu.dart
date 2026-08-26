@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'trip_models.dart';
 
 /// 行程级操作，作用于整份行程而非单个节点。
-enum TripAction { changeTimezone, complete, cancel, delete }
+enum TripAction { delete }
 
 class TripLifecycleMenu extends StatelessWidget {
   const TripLifecycleMenu({
@@ -22,36 +22,6 @@ class TripLifecycleMenu extends StatelessWidget {
       icon: const Icon(Icons.more_horiz),
       onSelected: onSelected,
       itemBuilder: (context) => [
-        if (!plan.isReadOnly)
-          const PopupMenuItem(
-            value: TripAction.changeTimezone,
-            child: ListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.public),
-              title: Text('更改行程时区'),
-            ),
-          ),
-        if (!plan.status.isTerminal) ...[
-          const PopupMenuItem(
-            value: TripAction.complete,
-            child: ListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.check_circle_outline),
-              title: Text('完成行程'),
-            ),
-          ),
-          const PopupMenuItem(
-            value: TripAction.cancel,
-            child: ListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(Icons.event_busy_outlined),
-              title: Text('取消行程'),
-            ),
-          ),
-        ],
         const PopupMenuItem(
           value: TripAction.delete,
           child: ListTile(
@@ -80,6 +50,30 @@ Future<bool> confirmCompleteTrip(BuildContext context) async {
         FilledButton(
           onPressed: () => Navigator.of(context).pop(true),
           child: const Text('确认完成'),
+        ),
+      ],
+    ),
+  );
+  return confirmed ?? false;
+}
+
+Future<bool> confirmCancelTrip(BuildContext context) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('取消这份行程？'),
+      content: const Text('取消后仍可保留和整理行程记录。'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('返回'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          style: FilledButton.styleFrom(
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+          child: const Text('确认取消'),
         ),
       ],
     ),

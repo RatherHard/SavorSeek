@@ -323,14 +323,6 @@ class _FakeWriter implements TripWriter {
   }) => _record({'op': 'delete', 'tripItemId': tripItemId}, () => _revision);
 
   @override
-  Future<int> changeTripTimezone({
-    required String tripId,
-    required int expectedRevision,
-    required String timezone,
-    String? idempotencyKey,
-  }) => _record({'op': 'timezone'}, () => 1);
-
-  @override
   Future<TripWriteResult> completeTrip({
     required String tripId,
     required int expectedRevision,

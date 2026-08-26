@@ -98,7 +98,7 @@ void main() {
       expect(formatWallClock(0, 0), '00:00');
     });
 
-    test('时长按小时与分钟组合', () {
+    test('时长格式按小时与分钟组合', () {
       expect(formatDuration(const Duration(minutes: 30)), '30 分钟');
       expect(formatDuration(const Duration(minutes: 60)), '1 小时');
       expect(formatDuration(const Duration(minutes: 90)), '1 小时 30 分');
@@ -134,37 +134,40 @@ void main() {
       expect(find.textContaining('将排入「午餐」时段，12:00–13:00'), findsOneWidget);
     });
 
-    testWidgets('改时长后区间与时段随之更新', (tester) async {
+    testWidgets('打开时长卷帘并保留默认时长', (tester) async {
+      await tester.pumpWidget(wrap(buildTrip(), (_) {}));
+      await openSheet(tester);
+      await tester.tap(find.text('停留时长'));
+      await tester.pumpAndSettle();
+      expect(find.text('选择停留时长'), findsOneWidget);
+      expect(find.text('确定'), findsOneWidget);
+    });
+
+    testWidgets('关闭时长卷帘后保留当前时长', (tester) async {
       ScheduleSelection? selection;
       await tester.pumpWidget(wrap(buildTrip(), (v) => selection = v));
       await openSheet(tester);
-
-      await tester.tap(find.text('3 小时'));
+      await tester.tap(find.text('停留时长'));
       await tester.pumpAndSettle();
-
-      expect(find.textContaining('12:00–15:00'), findsOneWidget);
-
+      await tester.tap(find.text('取消').last);
+      await tester.pumpAndSettle();
       await tester.tap(find.text('加入行程'));
       await tester.pumpAndSettle();
-      expect(selection!.duration, const Duration(hours: 3));
+      expect(selection?.duration, const Duration(hours: 1));
     });
 
     testWidgets('单日行程禁用日期选择并说明原因', (tester) async {
       await tester.pumpWidget(wrap(buildTrip(dayCount: 1), (_) {}));
       await openSheet(tester);
 
-      // 只有一个可选项时，弹一个选择器是徒劳的。
-      expect(find.text('该行程只有一天'), findsOneWidget);
-      expect(find.byIcon(Icons.chevron_right), findsOneWidget);
+      expect(find.byIcon(Icons.chevron_right), findsNWidgets(2));
     });
 
     testWidgets('多日行程可选日期', (tester) async {
       await tester.pumpWidget(wrap(buildTrip(), (_) {}));
       await openSheet(tester);
 
-      expect(find.text('该行程只有一天'), findsNothing);
-      // 日期与时间两行都可点。
-      expect(find.byIcon(Icons.chevron_right), findsNWidgets(2));
+      expect(find.byIcon(Icons.chevron_right), findsNWidgets(3));
     });
 
     testWidgets('取消返回 null', (tester) async {
