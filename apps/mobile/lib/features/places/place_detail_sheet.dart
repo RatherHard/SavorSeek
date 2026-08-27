@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:savorseek/app/theme/design_tokens.dart';
+import 'package:savorseek/features/places/favorite_repository.dart';
 
 import 'place_models.dart';
 
@@ -16,6 +17,12 @@ class PlaceDetailSheet extends StatelessWidget {
     required this.onClose,
     this.onAddToTrip,
     this.isAdding = false,
+    this.isFavorite,
+    this.isFavoritePending = false,
+    this.onFavorite,
+    this.onRetryFavorite,
+    this.favoriteError,
+    this.onUnauthenticatedFavorite,
   });
 
   final Place place;
@@ -26,6 +33,13 @@ class PlaceDetailSheet extends StatelessWidget {
 
   /// 写入进行中。此时按钮显示进度并阻止重复提交。
   final bool isAdding;
+
+  final bool? isFavorite;
+  final bool isFavoritePending;
+  final Future<void> Function()? onFavorite;
+  final Future<void> Function()? onRetryFavorite;
+  final FavoriteRepositoryException? favoriteError;
+  final Future<void> Function()? onUnauthenticatedFavorite;
 
   @override
   Widget build(BuildContext context) {
@@ -80,6 +94,55 @@ class PlaceDetailSheet extends StatelessWidget {
                 text: '信息更新于${formatFreshness(place.fetchedAt)}',
                 isSubtle: true,
               ),
+              if (isFavorite != null) ...[
+                const SizedBox(height: AppTokens.spaceLg),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: isFavoritePending
+                        ? null
+                        : onFavorite ?? onUnauthenticatedFavorite,
+                    icon: isFavoritePending
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(
+                            isFavorite!
+                                ? Icons.bookmark
+                                : Icons.bookmark_border,
+                          ),
+                    label: Text(
+                      isFavoritePending
+                          ? '正在保存…'
+                          : isFavorite!
+                          ? '取消收藏'
+                          : '收藏地点',
+                    ),
+                  ),
+                ),
+                if (favoriteError != null) ...[
+                  const SizedBox(height: AppTokens.spaceSm),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          favoriteError!.message,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: scheme.error,
+                          ),
+                        ),
+                      ),
+                      if (onRetryFavorite != null && favoriteError!.isRetryable)
+                        TextButton(
+                          onPressed: onRetryFavorite,
+                          child: const Text('重试'),
+                        ),
+                    ],
+                  ),
+                ],
+              ],
               const SizedBox(height: AppTokens.spaceLg),
               SizedBox(
                 width: double.infinity,

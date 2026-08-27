@@ -1,7 +1,7 @@
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import 'trip_time_zone.dart';
+import 'trip_wheel_picker_sheet.dart';
 
 const Duration defaultTripStopDuration = Duration(hours: 1);
 const Duration minimumTripStopDuration = Duration(minutes: 5);
@@ -13,10 +13,19 @@ Future<Duration?> showTripDurationPicker(
   required Duration initialDuration,
 }) {
   final clamped = clampTripStopDuration(initialDuration);
-  return showModalBottomSheet<Duration>(
-    context: context,
-    builder: (context) => _TripDurationPicker(initialDuration: clamped),
+  return showTripWheelPickerSheet<Duration>(
+    context,
+    title: '选择停留时长',
+    initialValue: clamped,
+    helperText: '最短 5 分钟，最长 12 小时',
+    isValueValid: _isTripStopDurationValid,
+    pickerBuilder: (context, onChanged) =>
+        _TripDurationPicker(initialDuration: clamped, onChanged: onChanged),
   );
+}
+
+bool _isTripStopDurationValid(Duration value) {
+  return value >= minimumTripStopDuration && value <= maximumTripStopDuration;
 }
 
 Duration clampTripStopDuration(Duration value) {
@@ -26,7 +35,11 @@ Duration clampTripStopDuration(Duration value) {
   final rounded =
       (minutes / tripStopDurationMinuteInterval).round() *
       tripStopDurationMinuteInterval;
-  return Duration(minutes: rounded);
+  final bounded = rounded.clamp(
+    minimumTripStopDuration.inMinutes,
+    maximumTripStopDuration.inMinutes,
+  );
+  return Duration(minutes: bounded);
 }
 
 String formatTripStopDuration(Duration duration) {
@@ -70,66 +83,55 @@ String formatScheduleRange({
 }
 
 class _TripDurationPicker extends StatefulWidget {
-  const _TripDurationPicker({required this.initialDuration});
+  const _TripDurationPicker({
+    required this.initialDuration,
+    required this.onChanged,
+  });
 
   final Duration initialDuration;
+  final ValueChanged<Duration> onChanged;
 
   @override
   State<_TripDurationPicker> createState() => _TripDurationPickerState();
 }
 
 class _TripDurationPickerState extends State<_TripDurationPicker> {
-  late Duration _duration = widget.initialDuration;
+  late int _hours = widget.initialDuration.inHours;
+  late int _minutes = widget.initialDuration.inMinutes % 60;
+
+  void _emit() {
+    widget.onChanged(Duration(hours: _hours, minutes: _minutes));
+  }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('选择停留时长', style: theme.textTheme.titleMedium),
-            SizedBox(
-              height: 180,
-              child: CupertinoTimerPicker(
-                mode: CupertinoTimerPickerMode.hm,
-                initialTimerDuration: _duration,
-                minuteInterval: tripStopDurationMinuteInterval,
-                onTimerDurationChanged: (value) {
-                  setState(() => _duration = value);
-                },
-              ),
-            ),
-            Text(
-              '最短 5 分钟，最长 12 小时',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('取消'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: _duration < minimumTripStopDuration
-                        ? null
-                        : () => Navigator.of(context).pop(_duration),
-                    child: const Text('确定'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
+    return SizedBox(
+      height: tripWheelPickerHeight,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          TripWheelNumberColumn(
+            values: List.generate(13, (index) => index),
+            initialIndex: _hours,
+            labelBuilder: (value) => '$value',
+            onSelectedItemChanged: (value) {
+              setState(() => _hours = value);
+              _emit();
+            },
+          ),
+          Text('小时', style: Theme.of(context).textTheme.bodyMedium),
+          const SizedBox(width: 12),
+          TripWheelNumberColumn(
+            values: List.generate(12, (index) => index * 5),
+            initialIndex: _minutes ~/ tripStopDurationMinuteInterval,
+            labelBuilder: (value) => '$value',
+            onSelectedItemChanged: (value) {
+              setState(() => _minutes = value);
+              _emit();
+            },
+          ),
+          Text('分钟', style: Theme.of(context).textTheme.bodyMedium),
+        ],
       ),
     );
   }

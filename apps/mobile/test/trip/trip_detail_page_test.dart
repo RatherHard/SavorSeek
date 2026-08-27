@@ -127,18 +127,19 @@ void main() {
 
     expect(find.text('添加节点'), findsNothing);
     expect(find.byTooltip('行程操作'), findsNothing);
-    expect(find.byIcon(Icons.more_vert), findsNothing);
+    expect(find.byIcon(Icons.delete_outline), findsNothing);
   });
 
-  testWidgets('可写仓库的菜单含编辑入口', (tester) async {
+  testWidgets('可写仓库点击节点卡片进入编辑', (tester) async {
     await tester.pumpWidget(wrap(FakeWritableRepository(buildPlan())));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.tap(find.text('片儿川').last);
     await tester.pumpAndSettle();
 
-    expect(find.text('编辑'), findsOneWidget);
-    expect(find.text('改名称、备注与排期'), findsOneWidget);
+    expect(find.text('编辑节点'), findsOneWidget);
+    await tester.tap(find.text('取消').last);
+    await tester.pumpAndSettle();
   });
 
   testWidgets('编辑表单提交后调用 editTripItem', (tester) async {
@@ -146,9 +147,7 @@ void main() {
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.more_vert));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('编辑'));
+    await tester.tap(find.text('片儿川').last);
     await tester.pumpAndSettle();
 
     // 表单以当前值预填，用户只需改动要改的部分。

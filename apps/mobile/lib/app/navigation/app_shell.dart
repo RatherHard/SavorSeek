@@ -6,6 +6,7 @@ import 'package:savorseek/app/navigation/primary_nav_bar.dart';
 import 'package:savorseek/app/theme/design_tokens.dart';
 import 'package:savorseek/features/explore/explore_page.dart';
 import 'package:savorseek/features/mine/mine_page.dart';
+import 'package:savorseek/features/places/favorites_controller.dart';
 import 'package:savorseek/features/trip/trip_list_page.dart';
 
 /// 应用外壳：承载顶部主导航与三个主页面。
@@ -31,6 +32,16 @@ class AppShell extends StatefulWidget {
 
 class _AppShellState extends State<AppShell> {
   late AppDestination _current = widget.initialDestination;
+  late final FavoritesController _favorites = FavoritesController(
+    auth: widget.dependencies.auth,
+    repository: widget.dependencies.favoriteRepository,
+  )..loadFavoritePlaceIds();
+
+  @override
+  void dispose() {
+    _favorites.dispose();
+    super.dispose();
+  }
 
   void _select(AppDestination destination) {
     if (destination == _current) return;
@@ -52,6 +63,8 @@ class _AppShellState extends State<AppShell> {
           children: [
             ExplorePage(
               placeRepository: widget.dependencies.placeRepository,
+              favoriteController: _favorites,
+              auth: widget.dependencies.auth,
               scheduler: widget.dependencies.scheduler,
               consent: widget.dependencies.mapConsent,
             ),
@@ -62,7 +75,10 @@ class _AppShellState extends State<AppShell> {
               routeService: widget.dependencies.routeService,
               placeRepository: widget.dependencies.placeRepository,
             ),
-            MinePage(auth: widget.dependencies.auth),
+            MinePage(
+              auth: widget.dependencies.auth,
+              favoriteController: _favorites,
+            ),
           ],
         ),
       ),

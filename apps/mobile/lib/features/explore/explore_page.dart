@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:amap_map/amap_map.dart';
 import 'package:flutter/material.dart';
 import 'package:x_amap_base/x_amap_base.dart';
@@ -7,6 +9,10 @@ import 'package:savorseek/app/theme/design_tokens.dart';
 import 'package:savorseek/features/explore/agent_command_bar.dart';
 import 'package:savorseek/features/explore/amap_consent.dart';
 import 'package:savorseek/features/explore/amap_surface.dart';
+import 'package:savorseek/features/explore/place_results_drawer.dart';
+import 'package:savorseek/features/auth/auth_service.dart';
+import 'package:savorseek/features/auth/auth_sheet.dart';
+import 'package:savorseek/features/places/favorites_controller.dart';
 import 'package:savorseek/features/places/place_detail_sheet.dart';
 import 'package:savorseek/features/places/place_models.dart';
 import 'package:savorseek/features/places/place_repository.dart';
@@ -26,6 +32,8 @@ class ExplorePage extends StatefulWidget {
   const ExplorePage({
     super.key,
     this.placeRepository,
+    this.favoriteController,
+    this.auth,
     this.scheduler,
     this.consent,
   });
@@ -37,10 +45,13 @@ class ExplorePage extends StatefulWidget {
   final PlaceScheduler? scheduler;
 
   /// 高德合规同意状态。
-  ///
-  /// 由外部注入时与行程页共享同一实例：同意与否是同一个事实，留在页面内会让
-  /// 用户在两处各同意一次。为空时本页自建（测试与未注入依赖的场景）。
   final AmapConsent? consent;
+
+  /// 与「我的」页共享的用户收藏状态。
+  final FavoritesController? favoriteController;
+
+  /// 认证能力，用于未登录收藏时打开登录引导。
+  final AuthService? auth;
 
   @override
   State<ExplorePage> createState() => _ExplorePageState();
@@ -71,12 +82,14 @@ class _ExplorePageState extends State<ExplorePage> {
   /// 已构造标记的那一份结果，用于避免重复构造（见 [_resolveMarkers]）。
   Object? _markersSource;
 
+  AMapController? _mapController;
   bool _isAddingToTrip = false;
 
   @override
   void initState() {
     super.initState();
     _consent.addListener(_onConsentChanged);
+    widget.favoriteController?.addListener(_onFavoritesChanged);
     final repository = widget.placeRepository;
     if (repository != null) {
       _search = PlaceSearchController(repository)
@@ -86,20 +99,27 @@ class _ExplorePageState extends State<ExplorePage> {
 
   void _onConsentChanged() => setState(() {});
   void _onSearchChanged() => setState(() {});
+  void _onFavoritesChanged() => setState(() {});
 
   @override
   void dispose() {
     _consent.removeListener(_onConsentChanged);
     if (_ownsConsent) _consent.dispose();
     _search?.removeListener(_onSearchChanged);
+    widget.favoriteController?.removeListener(_onFavoritesChanged);
     _search?.dispose();
     super.dispose();
   }
 
   Future<void> _submitCommand(String command) async {
-    // 城市固定为默认视野所在城市：定位能力尚未接入，不限定城市会让「烧烤」
-    // 这类通用词返回外地结果。
     await _search?.searchByKeywords(command, city: _defaultCity);
+    if (!mounted) return;
+    final state = _search?.state;
+    if (state is PlaceSearchLoaded) {
+      await widget.favoriteController?.loadFavoritePlaceIds(
+        placeIds: state.places.map((place) => place.id),
+      );
+    }
   }
 
   /// 加入行程：先取排期上下文，再让用户选年月日时分，最后写入。
@@ -174,6 +194,26 @@ class _ExplorePageState extends State<ExplorePage> {
     );
   }
 
+  void _selectPlaceFromList(Place place) {
+    _search?.select(place);
+    final controller = _mapController;
+    if (controller == null || !place.hasCoordinates) return;
+    unawaited(
+      controller.moveCamera(
+        CameraUpdate.newLatLngZoom(
+          LatLng(place.latitude!, place.longitude!),
+          16,
+        ),
+      ),
+    );
+  }
+
+  bool _isFavoritePending(String placeId) {
+    final state = widget.favoriteController!.mutationState(placeId);
+    return state == FavoriteMutationState.saving ||
+        state == FavoriteMutationState.removing;
+  }
+
   List<Widget> _buildOverlays(PlaceSearchController search) {
     final selected = search.selected;
     final notice = _statusNotice(search);
@@ -195,6 +235,25 @@ class _ExplorePageState extends State<ExplorePage> {
           bottom: AppTokens.spaceMd,
           child: notice,
         ),
+      if (widget.favoriteController != null &&
+          search.state is PlaceSearchLoaded)
+        Positioned.fill(
+          child: PlaceResultsDrawer(
+            places: (search.state as PlaceSearchLoaded).places,
+            favorites: widget.favoriteController!,
+            selectedPlaceId: selected?.id,
+            onSelect: _selectPlaceFromList,
+            onToggleFavorite: (placeId) =>
+                widget.favoriteController!.toggle(placeId),
+            onRetryFavorite: (placeId) =>
+                widget.favoriteController!.retry(placeId),
+            onUnauthenticatedFavorite: widget.auth?.isSignedIn == false
+                ? (_) async {
+                    await showAuthSheet(context, auth: widget.auth!);
+                  }
+                : null,
+          ),
+        ),
       if (selected != null)
         Positioned(
           left: 0,
@@ -203,6 +262,22 @@ class _ExplorePageState extends State<ExplorePage> {
           child: PlaceDetailSheet(
             place: selected,
             onClose: search.clearSelection,
+            isFavorite: widget.favoriteController?.isFavorite(selected.id),
+            isFavoritePending: widget.favoriteController == null
+                ? false
+                : _isFavoritePending(selected.id),
+            onFavorite: widget.auth?.isSignedIn == true
+                ? () => widget.favoriteController!.toggle(selected.id)
+                : null,
+            onUnauthenticatedFavorite: widget.auth?.isSignedIn == false
+                ? () async {
+                    await showAuthSheet(context, auth: widget.auth!);
+                  }
+                : null,
+            onRetryFavorite: widget.favoriteController == null
+                ? null
+                : () => widget.favoriteController!.retry(selected.id),
+            favoriteError: widget.favoriteController?.errorFor(selected.id),
             onAddToTrip: widget.scheduler == null ? null : _addSelectedToTrip,
             isAdding: _isAddingToTrip,
           ),
@@ -262,6 +337,7 @@ class _ExplorePageState extends State<ExplorePage> {
 
     return AmapSurface(
       markers: _resolveMarkers(),
+      onMapCreated: (controller) => _mapController = controller,
       onMapTap: (_) => _search?.clearSelection(),
     );
   }
@@ -308,7 +384,7 @@ class _ExplorePageState extends State<ExplorePage> {
   void _onMarkerTapped(String markerId) {
     final place = _placeByMarkerId[markerId];
     if (place == null) return;
-    _search?.select(place);
+    _selectPlaceFromList(place);
   }
 }
 

@@ -56,7 +56,7 @@ class TripDayTimeline extends StatelessWidget {
             onLongPress: onToggleSelection == null
                 ? null
                 : () => onToggleSelection!(entry.value),
-            onMenuAction: onStopAction == null || isSelecting
+            onAction: onStopAction == null || isSelecting
                 ? null
                 : (action) => onStopAction!(day, entry.value, action),
           ),
@@ -74,7 +74,7 @@ class _TimelineStop extends StatelessWidget {
     this.isSelecting = false,
     this.onTap,
     this.onLongPress,
-    this.onMenuAction,
+    this.onAction,
   });
 
   final TripStop stop;
@@ -83,7 +83,7 @@ class _TimelineStop extends StatelessWidget {
   final bool isSelecting;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
-  final ValueChanged<StopAction>? onMenuAction;
+  final ValueChanged<StopAction>? onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -131,7 +131,7 @@ class _TimelineStop extends StatelessWidget {
               isSelecting: isSelecting,
               onTap: onTap,
               onLongPress: onLongPress,
-              onMenuAction: onMenuAction,
+              onAction: onAction,
             ),
           ),
         ],
@@ -153,7 +153,7 @@ class _StopCard extends StatelessWidget {
     this.isSelecting = false,
     this.onTap,
     this.onLongPress,
-    this.onMenuAction,
+    this.onAction,
   });
 
   final TripStop stop;
@@ -168,7 +168,7 @@ class _StopCard extends StatelessWidget {
   final VoidCallback? onLongPress;
 
   /// 操作菜单回调。为空时不显示菜单。
-  final ValueChanged<StopAction>? onMenuAction;
+  final ValueChanged<StopAction>? onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -218,9 +218,18 @@ class _StopCard extends StatelessWidget {
                   ),
                   if (stop.isLocked)
                     Icon(Icons.lock_outline, size: 17, color: scheme.primary),
-                  if (onMenuAction != null) ...[
+                  if (onAction != null &&
+                      !isSelecting &&
+                      !stop.status.isTerminal) ...[
                     const SizedBox(width: AppTokens.spaceXs),
-                    _StopMenu(stop: stop, onSelected: onMenuAction!),
+                    IconButton(
+                      tooltip: '删除节点',
+                      onPressed: () => onAction!(StopAction.delete),
+                      style: IconButton.styleFrom(
+                        foregroundColor: scheme.error,
+                      ),
+                      icon: const Icon(Icons.delete_outline),
+                    ),
                   ],
                 ],
               ),
@@ -242,54 +251,6 @@ class _StopCard extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// 行程项的操作菜单。
-///
-/// 按状态给出不同选项而非全部列出后禁用：终态项的「改期」永远不可用，列出来
-/// 只会让用户反复尝试。
-class _StopMenu extends StatelessWidget {
-  const _StopMenu({required this.stop, required this.onSelected});
-
-  final TripStop stop;
-  final ValueChanged<StopAction> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    // 已完成 / 已跳过的项是历史事实，库端拒绝任何变更，故不给菜单。
-    if (stop.status == TripItemStatus.completed ||
-        stop.status == TripItemStatus.skipped) {
-      return const SizedBox.shrink();
-    }
-
-    return PopupMenuButton<StopAction>(
-      onSelected: onSelected,
-      tooltip: '行程项操作',
-      icon: const Icon(Icons.more_vert, size: 18),
-      itemBuilder: (context) => [
-        const PopupMenuItem(
-          value: StopAction.edit,
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.edit_outlined),
-            title: Text('编辑'),
-            subtitle: Text('改名称、备注与排期'),
-          ),
-        ),
-        const PopupMenuItem(
-          value: StopAction.delete,
-          child: ListTile(
-            dense: true,
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.delete_outline),
-            title: Text('删除'),
-            subtitle: Text('不可恢复'),
-          ),
-        ),
-      ],
     );
   }
 }

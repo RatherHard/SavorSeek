@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -110,6 +111,61 @@ void main() {
     expect(call['startUtc'], '2026-09-01T04:00:00.000Z');
     expect(call['endUtc'], '2026-09-01T05:00:00.000Z');
     expect(call['timeSlot'], 'lunch');
+  });
+
+  testWidgets('添加节点开始时间使用卷帘并按行程时区提交', (tester) async {
+    final repository = buildRepository();
+    await tester.pumpWidget(wrap(repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('添加节点'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField, '节点名称'), '晚餐');
+    await tester.tap(find.text('开始时间'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('选择开始时间'), findsOneWidget);
+    final pickers = tester
+        .widgetList<CupertinoPicker>(find.byType(CupertinoPicker))
+        .toList();
+    pickers.first.onSelectedItemChanged!(19);
+    pickers.last.onSelectedItemChanged!(35);
+    await tester.tap(find.widgetWithText(FilledButton, '确定'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('19:35'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, '添加'));
+    await tester.pumpAndSettle();
+
+    final call = repository.calls.single;
+    expect(call['startUtc'], '2026-09-01T11:35:00.000Z');
+    expect(call['endUtc'], '2026-09-01T12:35:00.000Z');
+    expect(call['timeSlot'], 'dinner');
+  });
+
+  testWidgets('取消开始时间卷帘后保留默认时间', (tester) async {
+    final repository = buildRepository();
+    await tester.pumpWidget(wrap(repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('添加节点'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField, '节点名称'), '午餐');
+    await tester.tap(find.text('开始时间'));
+    await tester.pumpAndSettle();
+
+    final pickers = tester
+        .widgetList<CupertinoPicker>(find.byType(CupertinoPicker))
+        .toList();
+    pickers.first.onSelectedItemChanged!(19);
+    pickers.last.onSelectedItemChanged!(35);
+    await tester.tap(find.widgetWithText(OutlinedButton, '取消').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('12:00'), findsWidgets);
+    await tester.tap(find.widgetWithText(FilledButton, '添加'));
+    await tester.pumpAndSettle();
+    expect(repository.calls.single['startUtc'], '2026-09-01T04:00:00.000Z');
   });
 
   testWidgets('节点名称为空时不提交', (tester) async {

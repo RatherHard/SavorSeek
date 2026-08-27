@@ -34,6 +34,7 @@ select 'trip item planned timestamps retained' as check_name,
         and column_name = 'planned_end_at'
     )) as passed;
 
+select 'complete_trip exists' as check_name,
   to_regprocedure('public.complete_trip(uuid,bigint,uuid)') is not null as passed;
 
 select 'cancel_trip exists' as check_name,
@@ -89,7 +90,20 @@ select 'timezone update trigger rejects mutation' as check_name,
   position('timezone cannot be changed after trip creation'
     in pg_get_functiondef('public.validate_trip_row()'::regprocedure)) > 0 as passed;
 
-  position('(old.status = ''draft'' and new.status in (''confirmed'', ''completed'', ''cancelled''))' in pg_get_functiondef('public.validate_trip_row()'::regprocedure)) > 0 as passed;
+select 'draft to completed transition present' as check_name,
+  position(
+    'old.status = ''draft''' in regexp_replace(
+      pg_get_functiondef('public.validate_trip_row()'::regprocedure),
+      '\s+', ' ', 'g'
+    )
+  ) > 0
+  and position(
+    '''confirmed'', ''completed'', ''cancelled'''
+    in regexp_replace(
+      pg_get_functiondef('public.validate_trip_row()'::regprocedure),
+      '\s+', ' ', 'g'
+    )
+  ) > 0 as passed;
 
 select 'completed guard uses P0003' as check_name,
   position('errcode = ''P0003''' in pg_get_functiondef('public.assert_trip_writable(uuid)'::regprocedure)) > 0 as passed;

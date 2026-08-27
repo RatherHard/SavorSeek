@@ -51,33 +51,32 @@ Widget wrap(FakeWritableRepository repository) => MaterialApp(
   home: TripDetailPage(repository: repository, tripId: 'trip-1'),
 );
 
-Future<void> openMenu(WidgetTester tester, int index) async {
-  await tester.tap(find.byIcon(Icons.more_vert).at(index));
+Future<void> openDelete(WidgetTester tester, int index) async {
+  await tester.tap(find.byIcon(Icons.delete_outline).at(index));
   await tester.pumpAndSettle();
 }
 
 void main() {
   setUpAll(TripTimeZone.ensureInitialized);
 
-  testWidgets('待安排项菜单只有合并编辑与删除', (tester) async {
+  testWidgets('待安排项整卡进入编辑且右侧直接提供删除', (tester) async {
     await tester.pumpWidget(wrap(FakeWritableRepository(buildPlan())));
     await tester.pumpAndSettle();
-    await openMenu(tester, 0);
 
-    expect(find.text('编辑'), findsOneWidget);
-    expect(find.text('改名称、备注与排期'), findsOneWidget);
-    expect(find.text('删除'), findsOneWidget);
-    expect(find.text('取消'), findsNothing);
-    expect(find.text('恢复'), findsNothing);
+    expect(find.byIcon(Icons.more_vert), findsNothing);
+    expect(find.byIcon(Icons.delete_outline), findsNWidgets(2));
+    await tester.tap(find.text('老长春烧烤'));
+    await tester.pumpAndSettle();
+    expect(find.text('编辑节点'), findsOneWidget);
+    await tester.tap(find.text('取消').last);
+    await tester.pumpAndSettle();
   });
 
   testWidgets('删除前二次确认且确认后调用 deleteTripItem', (tester) async {
     final repository = FakeWritableRepository(buildPlan());
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
-    await openMenu(tester, 0);
-    await tester.tap(find.text('删除'));
-    await tester.pumpAndSettle();
+    await openDelete(tester, 0);
 
     expect(find.text('删除这个行程项？'), findsOneWidget);
     expect(find.textContaining('无法恢复'), findsOneWidget);
