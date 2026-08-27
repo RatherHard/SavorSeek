@@ -9,6 +9,7 @@ import 'pick_place_sheet.dart';
 import 'schedule_picker_sheet.dart';
 import 'trip_duration_picker.dart';
 import 'trip_repository.dart';
+import 'trip_time_picker.dart';
 
 /// 统一添加入口返回的草稿。
 @immutable
@@ -105,19 +106,19 @@ class _AddStopSheetState extends State<_AddStopSheet> {
       selectableDayPredicate: (date) => widget.trip.dayOn(date) != null,
       helpText: '选择行程中的哪一天',
     );
-    if (picked == null) return;
+    if (picked == null || !mounted) return;
     final day = widget.trip.dayOn(picked);
     if (day == null) return;
     setState(() => _day = day);
   }
 
   Future<void> _pickTime() async {
-    final picked = await showTimePicker(
-      context: context,
+    final picked = await showTripTimePicker(
+      context,
       initialTime: _time,
-      helpText: '选择开始时间',
+      title: '选择开始时间',
     );
-    if (picked == null) return;
+    if (picked == null || !mounted) return;
     setState(() => _time = picked);
   }
 

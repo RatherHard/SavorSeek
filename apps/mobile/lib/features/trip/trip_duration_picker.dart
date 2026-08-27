@@ -1,6 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
+import 'trip_wheel_picker_sheet.dart';
 import 'trip_time_zone.dart';
 
 const Duration defaultTripStopDuration = Duration(hours: 1);
@@ -13,9 +14,20 @@ Future<Duration?> showTripDurationPicker(
   required Duration initialDuration,
 }) {
   final clamped = clampTripStopDuration(initialDuration);
-  return showModalBottomSheet<Duration>(
-    context: context,
-    builder: (context) => _TripDurationPicker(initialDuration: clamped),
+  return showTripWheelPickerSheet<Duration>(
+    context,
+    title: '选择停留时长',
+    initialValue: clamped,
+    helperText: '最短 5 分钟，最长 12 小时',
+    isValueValid: (value) =>
+        value >= minimumTripStopDuration && value <= maximumTripStopDuration,
+    pickerBuilder: (context, onChanged) => CupertinoTimerPicker(
+      backgroundColor: Colors.transparent,
+      mode: CupertinoTimerPickerMode.hm,
+      initialTimerDuration: clamped,
+      minuteInterval: tripStopDurationMinuteInterval,
+      onTimerDurationChanged: onChanged,
+    ),
   );
 }
 
@@ -67,72 +79,6 @@ String formatScheduleRange({
       '${_formatWallClock(end.hour, end.minute)}'
       '${nextDay ? '（次日）' : ''}';
   return '${_formatWallClock(start.hour, start.minute)}–$endText';
-}
-
-class _TripDurationPicker extends StatefulWidget {
-  const _TripDurationPicker({required this.initialDuration});
-
-  final Duration initialDuration;
-
-  @override
-  State<_TripDurationPicker> createState() => _TripDurationPickerState();
-}
-
-class _TripDurationPickerState extends State<_TripDurationPicker> {
-  late Duration _duration = widget.initialDuration;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('选择停留时长', style: theme.textTheme.titleMedium),
-            SizedBox(
-              height: 180,
-              child: CupertinoTimerPicker(
-                mode: CupertinoTimerPickerMode.hm,
-                initialTimerDuration: _duration,
-                minuteInterval: tripStopDurationMinuteInterval,
-                onTimerDurationChanged: (value) {
-                  setState(() => _duration = value);
-                },
-              ),
-            ),
-            Text(
-              '最短 5 分钟，最长 12 小时',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('取消'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: _duration < minimumTripStopDuration
-                        ? null
-                        : () => Navigator.of(context).pop(_duration),
-                    child: const Text('确定'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 String _formatWallClock(int hour, int minute) {
