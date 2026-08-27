@@ -125,10 +125,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('选择开始时间'), findsOneWidget);
-    final picker = tester.widget<CupertinoDatePicker>(
-      find.byType(CupertinoDatePicker),
-    );
-    picker.onDateTimeChanged(DateTime(2020, 1, 1, 19, 35));
+    final pickers = tester
+        .widgetList<CupertinoPicker>(find.byType(CupertinoPicker))
+        .toList();
+    pickers.first.onSelectedItemChanged!(19);
+    pickers.last.onSelectedItemChanged!(35);
     await tester.tap(find.widgetWithText(FilledButton, '确定'));
     await tester.pumpAndSettle();
 
@@ -153,10 +154,11 @@ void main() {
     await tester.tap(find.text('开始时间'));
     await tester.pumpAndSettle();
 
-    final picker = tester.widget<CupertinoDatePicker>(
-      find.byType(CupertinoDatePicker),
-    );
-    picker.onDateTimeChanged(DateTime(2020, 1, 1, 19, 35));
+    final pickers = tester
+        .widgetList<CupertinoPicker>(find.byType(CupertinoPicker))
+        .toList();
+    pickers.first.onSelectedItemChanged!(19);
+    pickers.last.onSelectedItemChanged!(35);
     await tester.tap(find.widgetWithText(OutlinedButton, '取消').last);
     await tester.pumpAndSettle();
 

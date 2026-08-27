@@ -6,6 +6,7 @@ import 'schedule_picker_sheet.dart';
 import 'trip_duration_picker.dart';
 import 'trip_models.dart';
 import 'trip_repository.dart';
+import 'trip_time_picker.dart';
 
 /// 编辑节点表单的提交结果。
 @immutable
@@ -100,12 +101,12 @@ class _EditStopSheetState extends State<_EditStopSheet> {
   }
 
   Future<void> _pickTime() async {
-    final picked = await showTimePicker(
-      context: context,
+    final picked = await showTripTimePicker(
+      context,
       initialTime: _time,
-      helpText: '选择开始时间',
+      title: '选择开始时间',
     );
-    if (picked == null) return;
+    if (picked == null || !mounted) return;
     setState(() => _time = picked);
   }
 

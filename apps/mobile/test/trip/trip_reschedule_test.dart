@@ -357,7 +357,7 @@ void main() {
 
     // 东京 19:00，而非设备时区折算出的 18:00。
     expect(find.text('晚餐 · 19:00–20:00'), findsOneWidget);
-    expect(find.byIcon(Icons.more_vert), findsOneWidget);
+    expect(find.byIcon(Icons.delete_outline), findsOneWidget);
   });
 
   testWidgets('只读仓库不给出改期入口', (tester) async {
@@ -365,16 +365,14 @@ void main() {
     await tester.pumpAndSettle();
 
     // 点了没有反馈的入口比没有入口更糟。
-    expect(find.byIcon(Icons.more_vert), findsNothing);
+    expect(find.byIcon(Icons.delete_outline), findsNothing);
   });
 
   testWidgets('改期表单以现有排期为初值', (tester) async {
     await tester.pumpWidget(wrap(FakeWritableRepository(buildTokyoPlan())));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.more_vert));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('编辑'));
+    await tester.tap(find.text('寿司大').last);
     await tester.pumpAndSettle();
 
     expect(find.text('编辑节点'), findsOneWidget);
@@ -394,9 +392,7 @@ void main() {
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.more_vert));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('编辑'));
+    await tester.tap(find.text('寿司大').last);
     await tester.pumpAndSettle();
     await tester.tap(find.text('保存'));
     await tester.pumpAndSettle();
@@ -421,9 +417,7 @@ void main() {
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.more_vert));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('编辑'));
+    await tester.tap(find.text('寿司大').last);
     await tester.pumpAndSettle();
     await tester.tap(find.text('保存'));
     await tester.pump();
@@ -436,9 +430,7 @@ void main() {
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.more_vert));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('编辑'));
+    await tester.tap(find.text('寿司大').last);
     await tester.pumpAndSettle();
     await tester.tap(find.text('取消'));
     await tester.pumpAndSettle();
@@ -479,6 +471,6 @@ void main() {
     await tester.pumpAndSettle();
 
     // 给已完成的到访改时间会让历史失真，库端也会拒绝。
-    expect(find.byIcon(Icons.more_vert), findsNothing);
+    expect(find.byIcon(Icons.delete_outline), findsNothing);
   });
 }

@@ -46,8 +46,8 @@ void main() {
     );
   }
 
-  Future<void> openMenu(WidgetTester tester) async {
-    await tester.tap(find.byIcon(Icons.more_vert).first);
+  Future<void> openDelete(WidgetTester tester) async {
+    await tester.tap(find.byIcon(Icons.delete_outline).first);
     await tester.pumpAndSettle();
   }
 
@@ -56,8 +56,7 @@ void main() {
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
 
-    await openMenu(tester);
-    await tester.tap(find.text('编辑'));
+    await tester.tap(find.text('海鲜面馆').last);
     await tester.pumpAndSettle();
     await tester.enterText(find.widgetWithText(TextFormField, '节点名称'), '新名字');
     await tester.tap(find.widgetWithText(FilledButton, '保存'));
@@ -78,9 +77,7 @@ void main() {
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
 
-    await openMenu(tester);
-    await tester.tap(find.text('删除'));
-    await tester.pumpAndSettle();
+    await openDelete(tester);
     await tester.tap(find.widgetWithText(FilledButton, '删除'));
     await tester.pumpAndSettle();
 
@@ -112,8 +109,7 @@ void main() {
     await tester.pumpWidget(wrap(repository));
     await tester.pumpAndSettle();
 
-    await openMenu(tester);
-    await tester.tap(find.text('编辑'));
+    await tester.tap(find.text('海鲜面馆').last);
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, '保存'));
     await tester.pumpAndSettle();

@@ -1,10 +1,85 @@
-import 'dart:ui';
-
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
-const double tripWheelPickerHeight = 180;
-const double _tripWheelPickerEdgeHeight = 42;
-const double _tripWheelPickerBlurSigma = 8;
+const double tripWheelPickerHeight = 176;
+const double _tripWheelPickerFadeExtent = 36;
+
+/// A compact numeric wheel whose edge treatment is limited to the number column.
+class TripWheelNumberColumn extends StatefulWidget {
+  const TripWheelNumberColumn({
+    super.key,
+    required this.values,
+    required this.initialIndex,
+    required this.labelBuilder,
+    required this.onSelectedItemChanged,
+    this.width = 56,
+  });
+
+  final List<int> values;
+  final int initialIndex;
+  final String Function(int value) labelBuilder;
+  final ValueChanged<int> onSelectedItemChanged;
+  final double width;
+
+  @override
+  State<TripWheelNumberColumn> createState() => _TripWheelNumberColumnState();
+}
+
+class _TripWheelNumberColumnState extends State<TripWheelNumberColumn> {
+  late final FixedExtentScrollController _controller =
+      FixedExtentScrollController(initialItem: widget.initialIndex);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final surface = Theme.of(context).colorScheme.surface;
+    final edgeFade = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [
+        surface.withValues(alpha: 0),
+        surface,
+        surface,
+        surface.withValues(alpha: 0),
+      ],
+      stops: [
+        0,
+        _tripWheelPickerFadeExtent / tripWheelPickerHeight,
+        1 - _tripWheelPickerFadeExtent / tripWheelPickerHeight,
+        1,
+      ],
+    );
+    return SizedBox(
+      width: widget.width,
+      height: tripWheelPickerHeight,
+      child: ShaderMask(
+        shaderCallback: (bounds) => edgeFade.createShader(bounds),
+        blendMode: BlendMode.dstIn,
+        child: CupertinoPicker.builder(
+          scrollController: _controller,
+          itemExtent: 40,
+          childCount: widget.values.length,
+          useMagnifier: true,
+          magnification: 1.08,
+          onSelectedItemChanged: (index) {
+            widget.onSelectedItemChanged(widget.values[index]);
+          },
+          itemBuilder: (context, index) => Center(
+            child: Text(
+              widget.labelBuilder(widget.values[index]),
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 Future<T?> showTripWheelPickerSheet<T>(
   BuildContext context, {
@@ -56,65 +131,59 @@ class _TripWheelPickerSheetState<T> extends State<_TripWheelPickerSheet<T>> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isValid = widget.isValueValid?.call(_value) ?? true;
+    final maxHeight = MediaQuery.sizeOf(context).height * 0.65;
 
     return SafeArea(
-      child: LayoutBuilder(
-        builder: (context, constraints) => SingleChildScrollView(
-          padding: EdgeInsets.zero,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: constraints.maxHeight),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
+      top: false,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Semantics(
+                header: true,
+                child: Text(widget.title, style: theme.textTheme.titleMedium),
+              ),
+              const SizedBox(height: 8),
+              _TripWheelPickerViewport(
+                child: widget.pickerBuilder(
+                  context,
+                  (value) => setState(() => _value = value),
+                ),
+              ),
+              if (widget.helperText != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  widget.helperText!,
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Row(
                 children: [
-                  Semantics(
-                    header: true,
-                    child: Text(
-                      widget.title,
-                      style: theme.textTheme.titleMedium,
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('取消'),
                     ),
                   ),
-                  SizedBox(
-                    height: tripWheelPickerHeight,
-                    child: _TripWheelPickerViewport(
-                      child: widget.pickerBuilder(
-                        context,
-                        (value) => setState(() => _value = value),
-                      ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: isValid
+                          ? () => Navigator.of(context).pop(_value)
+                          : null,
+                      child: const Text('确定'),
                     ),
-                  ),
-                  if (widget.helperText != null)
-                    Text(
-                      widget.helperText!,
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          child: const Text('取消'),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: FilledButton(
-                          onPressed: isValid
-                              ? () => Navigator.of(context).pop(_value)
-                              : null,
-                          child: const Text('确定'),
-                        ),
-                      ),
-                    ],
                   ),
                 ],
               ),
-            ),
+            ],
           ),
         ),
       ),
@@ -128,60 +197,5 @@ class _TripWheelPickerViewport extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) {
-    final surface = Theme.of(context).colorScheme.surface;
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        child,
-        _TripWheelPickerEdge(
-          alignment: Alignment.topCenter,
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [surface, surface.withValues(alpha: 0)],
-          ),
-        ),
-        _TripWheelPickerEdge(
-          alignment: Alignment.bottomCenter,
-          gradient: LinearGradient(
-            begin: Alignment.bottomCenter,
-            end: Alignment.topCenter,
-            colors: [surface, surface.withValues(alpha: 0)],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _TripWheelPickerEdge extends StatelessWidget {
-  const _TripWheelPickerEdge({required this.alignment, required this.gradient});
-
-  final Alignment alignment;
-  final Gradient gradient;
-
-  @override
-  Widget build(BuildContext context) {
-    return Align(
-      alignment: alignment,
-      child: IgnorePointer(
-        child: SizedBox(
-          height: _tripWheelPickerEdgeHeight,
-          width: double.infinity,
-          child: ClipRect(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(
-                sigmaX: _tripWheelPickerBlurSigma,
-                sigmaY: _tripWheelPickerBlurSigma,
-              ),
-              child: DecoratedBox(
-                decoration: BoxDecoration(gradient: gradient),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => child;
 }

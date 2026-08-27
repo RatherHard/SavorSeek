@@ -5,6 +5,7 @@ import 'package:savorseek/app/theme/design_tokens.dart';
 import 'trip_models.dart';
 import 'trip_duration_picker.dart';
 import 'trip_repository.dart';
+import 'trip_time_picker.dart';
 import 'trip_time_zone.dart';
 
 /// 排期选择结果。
@@ -144,12 +145,12 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
   }
 
   Future<void> _pickTime() async {
-    final picked = await showTimePicker(
-      context: context,
+    final picked = await showTripTimePicker(
+      context,
       initialTime: _time,
-      helpText: '选择到店时间',
+      title: '选择到店时间',
     );
-    if (picked == null) return;
+    if (picked == null || !mounted) return;
     setState(() => _time = picked);
   }
 
