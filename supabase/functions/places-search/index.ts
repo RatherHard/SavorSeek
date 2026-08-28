@@ -27,7 +27,9 @@ import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 
 import {
   type AmapQuery,
+  AMAP_EXTENSIONS,
   PAGE_SIZE,
+  PLACE_RESPONSE_CONTRACT_VERSION,
   requireAmapKey,
   searchAmapPlaces,
 } from './amap.ts';
@@ -208,7 +210,7 @@ function parseCoordinate(value: unknown, limit: number, label: string): number {
 function parseRadius(value: unknown): number {
   if (value === undefined || value === null) return 3000;
   const radius = Number(value);
-  if (!Number.isFinite(radius) || radius <= 0 || radius > MAX_RADIUS_METERS) {
+  if (!Number.isFinite(radius) || radius < 1 || radius > MAX_RADIUS_METERS) {
     throw new PlacesSearchError(
       'invalid_request',
       `检索半径必须在 1 到 ${MAX_RADIUS_METERS} 米之间。`,
@@ -267,6 +269,8 @@ function toQueryParams(query: AmapQuery): Record<string, unknown> {
       keywords: query.keywords,
       page: query.page,
       page_size: PAGE_SIZE,
+      extensions: AMAP_EXTENSIONS,
+      contract_version: PLACE_RESPONSE_CONTRACT_VERSION,
     };
   }
   return {
@@ -277,6 +281,8 @@ function toQueryParams(query: AmapQuery): Record<string, unknown> {
     page: query.page,
     page_size: PAGE_SIZE,
     radius: query.radius,
+    extensions: AMAP_EXTENSIONS,
+    contract_version: PLACE_RESPONSE_CONTRACT_VERSION,
   };
 }
 

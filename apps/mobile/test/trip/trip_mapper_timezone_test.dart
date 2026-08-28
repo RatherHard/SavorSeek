@@ -103,7 +103,7 @@ void main() {
       }
     });
 
-    test('缺少 trip_day_id 时不可改期', () {
+    test('planned 节点即使缺少 day id 仍可改期', () {
       final row = tokyoRow();
       ((row['trip_days'] as List).first as Map)['trip_items'][0].remove(
         'trip_day_id',
@@ -111,7 +111,7 @@ void main() {
 
       expect(
         TripMapper.planFromRow(row).days.single.stops.single.canReschedule,
-        isFalse,
+        isTrue,
       );
     });
 

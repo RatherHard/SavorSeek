@@ -125,7 +125,7 @@ void main() {
     expect(repository.loadedTripIds, contains('trip-b'));
   });
 
-  testWidgets('可写仓库给出新建入口，提交后调用 createTripWithDays', (tester) async {
+  testWidgets('可写仓库给出新建入口，提交后调用 createTrip', (tester) async {
     // 新建行程从详情页页头移到了列表层面，这里锁住它确实接线了。
     final repository = _FakeSupabaseRepository([buildPlan()]);
     await tester.pumpWidget(wrap(repository));
@@ -271,14 +271,15 @@ class _FakeSupabaseRepository extends SupabaseTripRepository {
   }
 
   @override
-  Future<TripWriteResult> createTripWithDays({
+  Future<TripWriteResult> createTrip({
     required String title,
-    required DateTime startDate,
-    required DateTime endDate,
-    required CreateTripKeys keys,
+    DateTime? startDate,
+    DateTime? endDate,
+    String timezone = 'Asia/Shanghai',
     int partySize = 1,
     int? budgetLimitMinor,
-    String timezone = 'Asia/Shanghai',
+    TripBudgetScope budgetScope = TripBudgetScope.total,
+    String? idempotencyKey,
   }) async {
     createdTitles.add(title);
     final failure = createError;

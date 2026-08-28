@@ -8,6 +8,11 @@ import 'package:savorseek/features/trip/trip_repository.dart';
 import 'package:savorseek/features/trip/trip_stop_actions.dart';
 import 'package:savorseek/features/trip/trip_time_zone.dart';
 
+String _formatTestDate(DateTime date) =>
+    '${date.year.toString().padLeft(4, '0')}-'
+    '${date.month.toString().padLeft(2, '0')}-'
+    '${date.day.toString().padLeft(2, '0')}';
+
 void main() {
   setUpAll(TripTimeZone.ensureInitialized);
 
@@ -118,9 +123,7 @@ void main() {
       await ctx.actions.editStop(
         plan: plan,
         stop: stop,
-        currentDayId: 'day-1',
         currentDayDate: DateTime(2026, 9, 1),
-        targetDayId: 'day-2',
         targetDayDate: DateTime(2026, 9, 2),
         hour: 12,
         minute: 0,
@@ -135,7 +138,7 @@ void main() {
       expect(call['op'], 'edit');
       expect(call['title'], '新名字');
       expect(call['notes'], '新备注');
-      expect(call['tripDayId'], 'day-2');
+      expect(call['localDate'], '2026-09-02');
       expect(call['startUtc'], '2026-09-02T03:00:00.000Z');
       expect(call['endUtc'], '2026-09-02T05:00:00.000Z');
       expect(call['timeSlot'], 'lunch');
@@ -149,9 +152,7 @@ void main() {
       await ctx.actions.editStop(
         plan: plan,
         stop: stop,
-        currentDayId: 'day-1',
         currentDayDate: DateTime(2026, 9, 1),
-        targetDayId: 'day-2',
         targetDayDate: DateTime(2026, 9, 2),
         hour: 12,
         minute: 0,
@@ -169,7 +170,7 @@ void main() {
       expect(call['op'], 'edit');
       expect(call['title'], '寿司大');
       expect(call['notes'], isNull);
-      expect(call['tripDayId'], 'day-1');
+      expect(call['localDate'], '2026-09-01');
       expect(call['startUtc'], '2026-09-01T10:00:00.000Z');
       expect(call['endUtc'], '2026-09-01T11:00:00.000Z');
       expect(call['timeSlot'], 'dinner');
@@ -203,7 +204,6 @@ void main() {
       final ctx = build();
       await ctx.actions.addBreak(
         plan: buildPlan(),
-        tripDayId: 'day-1',
         dayDate: DateTime(2026, 9, 1),
         title: '回酒店休息',
         hour: 15,
@@ -219,7 +219,6 @@ void main() {
       final ctx = build();
       await ctx.actions.addPlace(
         plan: buildPlan(),
-        tripDayId: 'day-1',
         dayDate: DateTime(2026, 9, 1),
         placeId: 'place-1',
         title: '海鲜面馆',
@@ -260,7 +259,7 @@ class _FakeWriter implements TripWriter {
     required String tripId,
     required int expectedRevision,
     required String tripItemId,
-    required String tripDayId,
+    required DateTime localDate,
     required DateTime plannedStartAt,
     required DateTime plannedEndAt,
     required TripStopType timeSlot,
@@ -268,7 +267,7 @@ class _FakeWriter implements TripWriter {
   }) => _record({
     'op': 'reschedule',
     'tripItemId': tripItemId,
-    'tripDayId': tripDayId,
+    'localDate': _formatTestDate(localDate),
     'expectedRevision': expectedRevision,
     'startUtc': plannedStartAt.toUtc().toIso8601String(),
     'endUtc': plannedEndAt.toUtc().toIso8601String(),
@@ -282,7 +281,7 @@ class _FakeWriter implements TripWriter {
     required String tripItemId,
     required String title,
     String? notes,
-    required String tripDayId,
+    required DateTime localDate,
     required DateTime plannedStartAt,
     required DateTime plannedEndAt,
     required TripStopType timeSlot,
@@ -290,7 +289,7 @@ class _FakeWriter implements TripWriter {
   }) => _record({
     'op': 'edit',
     'tripItemId': tripItemId,
-    'tripDayId': tripDayId,
+    'localDate': _formatTestDate(localDate),
     'expectedRevision': expectedRevision,
     'title': title,
     'notes': notes,
@@ -351,7 +350,7 @@ class _FakeWriter implements TripWriter {
   Future<TripWriteResult> addBreakItem({
     required String tripId,
     required int expectedRevision,
-    required String tripDayId,
+    required DateTime localDate,
     required String title,
     required DateTime plannedStartAt,
     required DateTime plannedEndAt,
@@ -368,7 +367,7 @@ class _FakeWriter implements TripWriter {
   Future<TripWriteResult> addPlaceItem({
     required String tripId,
     required int expectedRevision,
-    required String tripDayId,
+    required DateTime localDate,
     required String placeId,
     required String title,
     required DateTime plannedStartAt,

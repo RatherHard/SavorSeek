@@ -72,14 +72,12 @@ class TripStopActions {
 
   /// 改期：调整某个行程项的日期与时间。
   ///
-  /// [currentDayId] / [currentDayDate] 是项当前所属的那一天，撤销时用；
-  /// [targetDayId] / [targetDayDate] 是目标日，可跨天。
+  /// [currentDayDate] 是项当前所属日期，撤销时使用；[targetDayDate] 是目标日期，
+  /// 可以尚未存在对应的 trip_day。
   Future<void> reschedule({
     required TripPlan plan,
     required TripStop stop,
-    required String currentDayId,
     required DateTime currentDayDate,
-    required String targetDayId,
     required DateTime targetDayDate,
     required int hour,
     required int minute,
@@ -103,7 +101,7 @@ class TripStopActions {
           tripId: plan.id,
           expectedRevision: plan.revision,
           tripItemId: stop.id,
-          tripDayId: targetDayId,
+          localDate: targetDayDate,
           plannedStartAt: start,
           plannedEndAt: start.add(duration),
           timeSlot: timeSlot,
@@ -122,7 +120,7 @@ class TripStopActions {
           tripId: plan.id,
           expectedRevision: revision,
           tripItemId: stop.id,
-          tripDayId: currentDayId,
+          localDate: currentDayDate,
           plannedStartAt: start,
           plannedEndAt: start.add(originalDuration),
           timeSlot: originalType,
@@ -165,7 +163,6 @@ class TripStopActions {
   /// 添加一个自由安排节点。
   Future<void> addBreak({
     required TripPlan plan,
-    required String tripDayId,
     required DateTime dayDate,
     required String title,
     required int hour,
@@ -188,7 +185,7 @@ class TripStopActions {
         final result = await writer.addBreakItem(
           tripId: plan.id,
           expectedRevision: plan.revision,
-          tripDayId: tripDayId,
+          localDate: dayDate,
           title: title,
           plannedStartAt: start,
           plannedEndAt: start.add(duration),
@@ -218,7 +215,6 @@ class TripStopActions {
   /// [latitude] / [longitude] 为空时仍会写入，只是该节点不参与路线绘制。
   Future<void> addPlace({
     required TripPlan plan,
-    required String tripDayId,
     required DateTime dayDate,
     required String placeId,
     required String title,
@@ -243,7 +239,7 @@ class TripStopActions {
         final result = await writer.addPlaceItem(
           tripId: plan.id,
           expectedRevision: plan.revision,
-          tripDayId: tripDayId,
+          localDate: dayDate,
           placeId: placeId,
           title: title,
           plannedStartAt: start,
@@ -274,9 +270,7 @@ class TripStopActions {
   Future<void> editStop({
     required TripPlan plan,
     required TripStop stop,
-    required String currentDayId,
     required DateTime currentDayDate,
-    required String targetDayId,
     required DateTime targetDayDate,
     required int hour,
     required int minute,
@@ -305,7 +299,7 @@ class TripStopActions {
           tripItemId: stop.id,
           title: title,
           notes: notes,
-          tripDayId: targetDayId,
+          localDate: targetDayDate,
           plannedStartAt: start,
           plannedEndAt: start.add(duration),
           timeSlot: timeSlot,
@@ -325,7 +319,7 @@ class TripStopActions {
           tripItemId: stop.id,
           title: originalTitle,
           notes: originalNotes,
-          tripDayId: currentDayId,
+          localDate: currentDayDate,
           plannedStartAt: start,
           plannedEndAt: start.add(originalDuration),
           timeSlot: originalType,

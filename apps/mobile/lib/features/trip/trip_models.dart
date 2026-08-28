@@ -116,11 +116,8 @@ class TripStop {
   /// 是否可在地图上定位。
   bool get hasCoordinates => latitude != null && longitude != null;
 
-  /// 是否可改期。
-  ///
-  /// 终态项改期没有意义且会让历史失真；缺少 tripDayId 时无法构造写入请求。
-  bool get canReschedule =>
-      tripDayId != null && status == TripItemStatus.planned;
+  /// 能否改期。目标日期由服务端按自然日物化，已有行程日 id 不是必要条件。
+  bool get canReschedule => status == TripItemStatus.planned;
 
   TripStop copyWith({
     String? id,

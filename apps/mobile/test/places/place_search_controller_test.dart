@@ -11,6 +11,10 @@ class FakePlaceRepository implements PlaceRepository {
   FakePlaceRepository();
 
   final List<String> keywordCalls = [];
+  final List<
+    ({double latitude, double longitude, int radiusMeters, String? keywords})
+  >
+  aroundCalls = [];
   PlaceSearchResult result = const PlaceSearchResult(
     places: [],
     fromCache: false,
@@ -39,6 +43,12 @@ class FakePlaceRepository implements PlaceRepository {
     int radiusMeters = 3000,
     String? keywords,
   }) async {
+    aroundCalls.add((
+      latitude: latitude,
+      longitude: longitude,
+      radiusMeters: radiusMeters,
+      keywords: keywords,
+    ));
     final failure = error;
     if (failure != null) throw failure;
     return result;
@@ -71,6 +81,50 @@ void main() {
   test('初始状态为 idle', () {
     expect(controller.state, isA<PlaceSearchIdle>());
     expect(controller.selected, isNull);
+  });
+
+  test('视野检索进入 viewport 状态并传递周边参数', () async {
+    repository.result = PlaceSearchResult(
+      places: [buildPlace()],
+      fromCache: false,
+    );
+
+    await controller.searchAround(
+      latitude: 38.914,
+      longitude: 121.615,
+      radiusMeters: 3200,
+      queryKey: 'viewport-1',
+      keywords: '烧烤',
+    );
+
+    expect(repository.aroundCalls, hasLength(1));
+    expect(repository.aroundCalls.single.radiusMeters, 3200);
+    expect(repository.aroundCalls.single.keywords, '烧烤');
+    final state = controller.state;
+    expect(state, isA<PlaceSearchLoaded>());
+    expect((state as PlaceSearchLoaded).source, PlaceSearchSource.viewport);
+  });
+
+  test('相同视野 query key 不重复请求', () async {
+    repository.result = PlaceSearchResult(
+      places: [buildPlace()],
+      fromCache: false,
+    );
+
+    await controller.searchAround(
+      latitude: 38,
+      longitude: 121,
+      radiusMeters: 3000,
+      queryKey: 'same',
+    );
+    await controller.searchAround(
+      latitude: 38,
+      longitude: 121,
+      radiusMeters: 3000,
+      queryKey: 'same',
+    );
+
+    expect(repository.aroundCalls, hasLength(1));
   });
 
   test('空白关键词不触发请求', () async {

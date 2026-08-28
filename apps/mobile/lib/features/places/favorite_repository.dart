@@ -52,6 +52,7 @@ class FavoritePlace {
         address: json['address'] as String?,
         latitude: _readDouble(json['latitude']),
         longitude: _readDouble(json['longitude']),
+        rating: _readDouble(json['rating']),
         fetchedAt: fetched.toLocal(),
       ),
     );

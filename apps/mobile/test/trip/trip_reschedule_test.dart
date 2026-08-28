@@ -6,6 +6,11 @@ import 'package:savorseek/features/trip/trip_detail_page.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
 import 'package:savorseek/features/trip/trip_time_zone.dart';
 
+String _formatTestDate(DateTime date) =>
+    '${date.year.toString().padLeft(4, '0')}-'
+    '${date.month.toString().padLeft(2, '0')}-'
+    '${date.day.toString().padLeft(2, '0')}';
+
 /// 记录改期调用的仓库。同时实现读与写，模拟真实仓库的能力组合。
 class FakeWritableRepository implements TripRepository, TripWriter {
   FakeWritableRepository(this._plan, {List<TripPlan>? others})
@@ -54,7 +59,7 @@ class FakeWritableRepository implements TripRepository, TripWriter {
     required String tripId,
     required int expectedRevision,
     required String tripItemId,
-    required String tripDayId,
+    required DateTime localDate,
     required DateTime plannedStartAt,
     required DateTime plannedEndAt,
     required TripStopType timeSlot,
@@ -64,7 +69,7 @@ class FakeWritableRepository implements TripRepository, TripWriter {
       'tripId': tripId,
       'expectedRevision': expectedRevision,
       'tripItemId': tripItemId,
-      'tripDayId': tripDayId,
+      'localDate': _formatTestDate(localDate),
       'startUtc': plannedStartAt.toUtc().toIso8601String(),
       'endUtc': plannedEndAt.toUtc().toIso8601String(),
       'timeSlot': timeSlot.wireName,
@@ -82,7 +87,7 @@ class FakeWritableRepository implements TripRepository, TripWriter {
     required String tripItemId,
     required String title,
     String? notes,
-    required String tripDayId,
+    required DateTime localDate,
     required DateTime plannedStartAt,
     required DateTime plannedEndAt,
     required TripStopType timeSlot,
@@ -91,7 +96,7 @@ class FakeWritableRepository implements TripRepository, TripWriter {
     calls.add({
       'op': 'edit',
       'tripItemId': tripItemId,
-      'tripDayId': tripDayId,
+      'localDate': _formatTestDate(localDate),
       'title': title,
       'notes': notes,
       'expectedRevision': expectedRevision,
@@ -160,7 +165,7 @@ class FakeWritableRepository implements TripRepository, TripWriter {
   Future<TripWriteResult> addBreakItem({
     required String tripId,
     required int expectedRevision,
-    required String tripDayId,
+    required DateTime localDate,
     required String title,
     required DateTime plannedStartAt,
     required DateTime plannedEndAt,
@@ -170,7 +175,7 @@ class FakeWritableRepository implements TripRepository, TripWriter {
   }) async {
     calls.add({
       'op': 'addBreak',
-      'tripDayId': tripDayId,
+      'localDate': _formatTestDate(localDate),
       'title': title,
       'startUtc': plannedStartAt.toUtc().toIso8601String(),
       'endUtc': plannedEndAt.toUtc().toIso8601String(),
@@ -187,7 +192,7 @@ class FakeWritableRepository implements TripRepository, TripWriter {
   Future<TripWriteResult> addPlaceItem({
     required String tripId,
     required int expectedRevision,
-    required String tripDayId,
+    required DateTime localDate,
     required String placeId,
     required String title,
     required DateTime plannedStartAt,
@@ -200,7 +205,7 @@ class FakeWritableRepository implements TripRepository, TripWriter {
   }) async {
     calls.add({
       'op': 'addPlace',
-      'tripDayId': tripDayId,
+      'localDate': _formatTestDate(localDate),
       'placeId': placeId,
       'title': title,
       'startUtc': plannedStartAt.toUtc().toIso8601String(),
@@ -400,7 +405,7 @@ void main() {
     expect(repository.calls, hasLength(1));
     final call = repository.calls.single;
     expect(call['tripItemId'], 'item-1');
-    expect(call['tripDayId'], 'day-1');
+    expect(call['localDate'], '2026-09-01');
     expect(call['expectedRevision'], 4);
     // 东京 19:00 折算为 UTC 10:00——按设备时区（UTC+8）会错成 11:00。
     expect(call['startUtc'], '2026-09-01T10:00:00.000Z');

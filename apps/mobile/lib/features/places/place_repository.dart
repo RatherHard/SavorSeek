@@ -59,7 +59,7 @@ abstract interface class PlaceRepository {
   Future<PlaceSearchResult> searchAround({
     required double latitude,
     required double longitude,
-    int radiusMeters,
+    int radiusMeters = 3000,
     String? keywords,
   });
 }
@@ -177,28 +177,32 @@ class SupabasePlaceRepository implements PlaceRepository {
   }
 
   PlaceSearchResult _parse(Object? data) {
-    if (data is! Map) {
-      throw const PlaceSearchException(
-        '地点检索返回了非预期的结果。',
-        failure: PlaceSearchFailure.storageFailure,
-      );
-    }
-    final rows = data['places'];
-    final places = rows is List
-        ? rows
-              .whereType<Map>()
-              .map((row) => Place.fromJson(Map<String, dynamic>.from(row)))
-              .toList(growable: false)
-        : const <Place>[];
-    final fetchedAt = data['fetched_at'];
-    return PlaceSearchResult(
-      places: places,
-      fromCache: data['from_cache'] == true,
-      fetchedAt: fetchedAt is String
-          ? DateTime.tryParse(fetchedAt)?.toLocal()
-          : null,
+    return parsePlaceSearchResponse(data);
+  }
+}
+
+PlaceSearchResult parsePlaceSearchResponse(Object? data) {
+  if (data is! Map) {
+    throw const PlaceSearchException(
+      '地点检索返回了非预期的结果。',
+      failure: PlaceSearchFailure.storageFailure,
     );
   }
+  final rows = data['places'];
+  final places = rows is List
+      ? rows
+            .whereType<Map>()
+            .map((row) => Place.fromJson(Map<String, dynamic>.from(row)))
+            .toList(growable: false)
+      : const <Place>[];
+  final fetchedAt = data['fetched_at'];
+  return PlaceSearchResult(
+    places: places,
+    fromCache: data['from_cache'] == true,
+    fetchedAt: fetchedAt is String
+        ? DateTime.tryParse(fetchedAt)?.toLocal()
+        : null,
+  );
 }
 
 /// 把函数返回的错误体翻译成客户端分支。

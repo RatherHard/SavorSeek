@@ -261,9 +261,7 @@ class _TripDetailPageState extends State<TripDetailPage> {
     await actions.editStop(
       plan: plan,
       stop: stop,
-      currentDayId: day.id ?? stop.tripDayId ?? draft.selection.day.id,
       currentDayDate: day.date,
-      targetDayId: draft.selection.day.id,
       targetDayDate: draft.selection.day.localDate,
       hour: draft.selection.hour,
       minute: draft.selection.minute,
@@ -344,10 +342,6 @@ class _TripDetailPageState extends State<TripDetailPage> {
     if (actions == null) return;
 
     final days = _dayRefsOf(plan);
-    if (days.isEmpty) {
-      _showMessage('行程还没有可安排的日期。');
-      return;
-    }
 
     final draft = await showAddStopSheet(
       context,
@@ -366,7 +360,6 @@ class _TripDetailPageState extends State<TripDetailPage> {
     if (place == null) {
       await actions.addBreak(
         plan: plan,
-        tripDayId: draft.selection.day.id,
         dayDate: draft.selection.day.localDate,
         title: draft.title,
         hour: draft.selection.hour,
@@ -379,7 +372,6 @@ class _TripDetailPageState extends State<TripDetailPage> {
     }
     await actions.addPlace(
       plan: plan,
-      tripDayId: draft.selection.day.id,
       dayDate: draft.selection.day.localDate,
       placeId: place.id,
       title: draft.title,
@@ -396,8 +388,7 @@ class _TripDetailPageState extends State<TripDetailPage> {
   /// 行程中可供排期的日期。缺 id 的天来自演示数据，无法作为写入目标。
   List<TripDayRef> _dayRefsOf(TripPlan plan) {
     return plan.days
-        .where((item) => item.id != null)
-        .map((item) => TripDayRef(id: item.id!, localDate: item.date))
+        .map((item) => TripDayRef(id: item.id, localDate: item.date))
         .toList(growable: false);
   }
 
@@ -645,8 +636,8 @@ class _TripHeader extends StatelessWidget {
     final scheme = theme.colorScheme;
     final displayStatus = resolveTripDisplayStatus(
       persistedStatus: plan.status,
-      startDate: plan.days.isEmpty ? DateTime.now() : plan.days.first.date,
-      endDate: plan.days.isEmpty ? DateTime.now() : plan.days.last.date,
+      startDate: plan.days.isEmpty ? null : plan.days.first.date,
+      endDate: plan.days.isEmpty ? null : plan.days.last.date,
       timezone: plan.timezone,
       now: DateTime.now().toUtc(),
     );

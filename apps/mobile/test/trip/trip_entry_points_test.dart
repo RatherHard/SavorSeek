@@ -106,7 +106,7 @@ void main() {
     final call = repository.calls.single;
     expect(call['op'], 'addBreak');
     expect(call['title'], '回酒店休息');
-    expect(call['tripDayId'], 'day-1');
+    expect(call['localDate'], '2026-09-01');
     // 默认 12:00 起 1 小时，按 Asia/Shanghai 折算即 UTC 04:00–05:00。
     expect(call['startUtc'], '2026-09-01T04:00:00.000Z');
     expect(call['endUtc'], '2026-09-01T05:00:00.000Z');

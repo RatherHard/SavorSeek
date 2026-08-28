@@ -3,12 +3,12 @@ import 'package:flutter/material.dart';
 import 'trip_models.dart';
 import 'trip_time_zone.dart';
 
-enum TripDisplayStatus { upcoming, inProgress, completed, cancelled }
+enum TripDisplayStatus { upcoming, inProgress, completed, cancelled, pending }
 
 TripDisplayStatus resolveTripDisplayStatus({
   required TripStatus persistedStatus,
-  required DateTime startDate,
-  required DateTime endDate,
+  required DateTime? startDate,
+  required DateTime? endDate,
   required String timezone,
   required DateTime now,
 }) {
@@ -17,6 +17,9 @@ TripDisplayStatus resolveTripDisplayStatus({
   }
   if (persistedStatus == TripStatus.completed) {
     return TripDisplayStatus.completed;
+  }
+  if (startDate == null || endDate == null) {
+    return TripDisplayStatus.pending;
   }
 
   final localNow = TripTimeZone.toWallClock(
@@ -37,6 +40,7 @@ String tripDisplayStatusLabel(TripDisplayStatus status) {
     TripDisplayStatus.inProgress => '进行中',
     TripDisplayStatus.completed => '已完成',
     TripDisplayStatus.cancelled => '已取消',
+    TripDisplayStatus.pending => '待安排',
   };
 }
 
@@ -47,5 +51,6 @@ Color tripDisplayStatusColor(BuildContext context, TripDisplayStatus status) {
     TripDisplayStatus.inProgress => scheme.primary,
     TripDisplayStatus.completed => scheme.tertiary,
     TripDisplayStatus.cancelled => scheme.error,
+    TripDisplayStatus.pending => scheme.onSurfaceVariant,
   };
 }

@@ -38,9 +38,6 @@ class AddPlaceToTrip implements PlaceScheduler {
     required TripSchedulingContext trip,
     required ScheduleSelection selection,
   }) async {
-    // position 必须避开同一天已有项：(trip_day_id, position) 对非取消项唯一。
-    final position = await _repository.countItemsOnDay(selection.day.id);
-
     final start = resolveInstant(
       localDate: selection.day.localDate,
       timezone: trip.timezone,
@@ -51,12 +48,11 @@ class AddPlaceToTrip implements PlaceScheduler {
     await _repository.addTripItem(
       tripId: trip.tripId,
       expectedRevision: trip.revision,
-      tripDayId: selection.day.id,
+      localDate: selection.day.localDate,
       title: place.name,
       plannedStartAt: start,
       plannedEndAt: start.add(selection.duration),
       timeSlot: selection.timeSlot,
-      position: position,
       placeId: place.id,
       placeSnapshot: buildSnapshot(place),
     );
