@@ -7,6 +7,7 @@ Place buildPlace({
   String name = '老长春烧烤',
   String? category = '餐饮服务;中餐厅;烧烤',
   String? address = '中山区某路 1 号',
+  double? rating,
   DateTime? fetchedAt,
 }) {
   return Place(
@@ -16,6 +17,7 @@ Place buildPlace({
     address: address,
     latitude: 38.914003,
     longitude: 121.614682,
+    rating: rating,
     fetchedAt: fetchedAt ?? DateTime.now(),
   );
 }
@@ -24,6 +26,45 @@ Widget wrap(Widget child) => MaterialApp(home: Scaffold(body: child));
 
 void main() {
   group('PlaceDetailSheet', () {
+    testWidgets('展示有效评分', (tester) async {
+      await tester.pumpWidget(
+        wrap(PlaceDetailSheet(place: buildPlace(rating: 4.6), onClose: () {})),
+      );
+
+      expect(find.text('高德评分 4.6 / 5'), findsOneWidget);
+      expect(find.byIcon(Icons.star), findsOneWidget);
+    });
+
+    testWidgets('评分缺失或无效时不渲染评分行', (tester) async {
+      for (final rating in <double?>[
+        null,
+        double.nan,
+        double.infinity,
+        -1,
+        5.1,
+      ]) {
+        await tester.pumpWidget(
+          wrap(
+            PlaceDetailSheet(
+              place: buildPlace(rating: rating),
+              onClose: () {},
+            ),
+          ),
+        );
+
+        expect(find.textContaining('高德评分'), findsNothing);
+        expect(find.byIcon(Icons.star), findsNothing);
+      }
+    });
+
+    testWidgets('评分为零时仍显示为合法评分', (tester) async {
+      await tester.pumpWidget(
+        wrap(PlaceDetailSheet(place: buildPlace(rating: 0), onClose: () {})),
+      );
+
+      expect(find.text('高德评分 0.0 / 5'), findsOneWidget);
+    });
+
     testWidgets('展示名称、类别、地址与信息时效', (tester) async {
       await tester.pumpWidget(
         wrap(
