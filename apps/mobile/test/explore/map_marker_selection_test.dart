@@ -96,7 +96,10 @@ void main() {
       context: context(width: 1200, height: 1200),
     );
 
-    expect(result.places.map((place) => place.id), ['unrated', 'invalid-rating']);
+    expect(result.places.map((place) => place.id), [
+      'unrated',
+      'invalid-rating',
+    ]);
   });
 
   test('keeps only food places with valid coordinates', () {
