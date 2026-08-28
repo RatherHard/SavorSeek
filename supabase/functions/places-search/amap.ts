@@ -46,6 +46,10 @@ const QUOTA_ERROR_CODES = new Set([
   '40002', // SERVICE_EXPIRED              购买服务到期
 ]);
 
+/** Cache/data contract version for the fields normalized below. */
+export const PLACE_RESPONSE_CONTRACT_VERSION = 'amap-rating-v1';
+export const AMAP_EXTENSIONS = 'all';
+
 /** 归一化后的地点，字段与 public.places 的列一一对应。 */
 export interface NormalizedPlace {
   provider_place_id: string;
@@ -54,6 +58,7 @@ export interface NormalizedPlace {
   address: string | null;
   latitude: number | null;
   longitude: number | null;
+  rating: number | null;
   raw: Record<string, string> | null;
 }
 
@@ -116,9 +121,8 @@ function buildUrl(query: AmapQuery, key: string): URL {
   params.set('key', key);
   params.set('offset', String(PAGE_SIZE));
   params.set('page', String(query.page));
-  // base 而非 all：extensions=all 会返回评分、图片、团购等字段，缓存范围越大
-  // 合规风险越高。只取展示与溯源必需项。
-  params.set('extensions', 'base');
+  // `all` is required for the documented biz_ext.rating field.
+  params.set('extensions', AMAP_EXTENSIONS);
 
   if (query.kind === 'text') {
     params.set('keywords', query.keywords);
@@ -206,6 +210,10 @@ function assertAmapOk(payload: AmapResponse): void {
   );
 }
 
+export function normalizeAmapPlaces(pois: unknown): NormalizedPlace[] {
+  return normalizePois(pois);
+}
+
 function normalizePois(pois: unknown): NormalizedPlace[] {
   // 高德在无结果时把 pois 返回为空数组，个别接口返回空字符串，故先判类型。
   if (!Array.isArray(pois)) return [];
@@ -233,6 +241,7 @@ function normalizePoi(poi: unknown): NormalizedPlace | null {
     address: readString(row.address),
     latitude,
     longitude,
+    rating: readRating(row.biz_ext),
     raw: buildRaw(row),
   };
 }
@@ -250,6 +259,18 @@ function parseLocation(value: unknown): [number | null, number | null] {
   // 越界坐标会被库端 check 约束拒绝，导致整批 upsert 失败，故此处先剔除。
   if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return [null, null];
   return [longitude, latitude];
+}
+
+/** Only accept the documented AMap biz_ext.rating scalar. */
+function readRating(value: unknown): number | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const raw = (value as Record<string, unknown>).rating;
+  if (typeof raw !== 'string' && typeof raw !== 'number') return null;
+  if (typeof raw === 'string' && raw.trim() === '') return null;
+  const rating = typeof raw === 'number' ? raw : Number(raw);
+  return Number.isFinite(rating) && rating >= 0 && rating <= 5 ? rating : null;
 }
 
 /** 只留展示与溯源必需的字段，不留存完整响应。 */

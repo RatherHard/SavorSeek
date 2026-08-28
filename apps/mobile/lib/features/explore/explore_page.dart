@@ -11,6 +11,7 @@ import 'package:savorseek/features/explore/amap_consent.dart';
 import 'package:savorseek/features/explore/amap_surface.dart';
 import 'package:savorseek/features/explore/place_results_drawer.dart';
 import 'package:savorseek/features/explore/map_viewport.dart';
+import 'package:savorseek/features/explore/map_marker_selection.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 import 'package:savorseek/features/auth/auth_sheet.dart';
 import 'package:savorseek/features/places/favorites_controller.dart';
@@ -86,6 +87,9 @@ class _ExplorePageState extends State<ExplorePage> {
   AMapController? _mapController;
   Timer? _viewportDebounce;
   String? _scheduledViewportKey;
+  Size? _mapSize;
+  CameraPosition? _lastCameraPosition;
+  MapMarkerSelectionResult? _markerSelection;
   bool _isAddingToTrip = false;
 
   @override
@@ -101,14 +105,28 @@ class _ExplorePageState extends State<ExplorePage> {
   }
 
   void _onConsentChanged() => setState(() {});
-  void _onSearchChanged() => setState(() {});
+  void _onSearchChanged() {
+    _refreshMarkerSelection();
+    if (mounted) setState(() {});
+  }
+
   void _onFavoritesChanged() => setState(() {});
 
   void _onCameraMoveEnd(CameraPosition position) {
-    _scheduleViewportSearch(position);
+    _lastCameraPosition = position;
+    final size = _mapSize;
+    if (size != null) _scheduleViewportSearch(position, size);
   }
 
-  void _scheduleViewportSearch(CameraPosition position) {
+  void _onMapSizeChanged(Size size) {
+    if (size.width <= 0 || size.height <= 0 || size == _mapSize) return;
+    _mapSize = size;
+    final position = _lastCameraPosition;
+    if (position != null) _scheduleViewportSearch(position, size);
+    _refreshMarkerSelection();
+  }
+
+  void _scheduleViewportSearch(CameraPosition position, Size size) {
     final search = _search;
     if (search == null || widget.auth?.isSignedIn != true) return;
 
@@ -119,8 +137,8 @@ class _ExplorePageState extends State<ExplorePage> {
         latitude: position.target.latitude,
         longitude: position.target.longitude,
         zoom: position.zoom,
-        width: 360,
-        height: 640,
+        width: size.width,
+        height: size.height,
       );
       if (query == null || query.key == _scheduledViewportKey) return;
       _scheduledViewportKey = query.key;
@@ -137,7 +155,9 @@ class _ExplorePageState extends State<ExplorePage> {
 
   void _onMapCreated(AMapController controller) {
     _mapController = controller;
-    _scheduleViewportSearch(AmapSurface.initialCamera);
+    _lastCameraPosition = AmapSurface.initialCamera;
+    final size = _mapSize;
+    if (size != null) _scheduleViewportSearch(AmapSurface.initialCamera, size);
   }
 
   @override
@@ -217,11 +237,22 @@ class _ExplorePageState extends State<ExplorePage> {
       children: [
         // Expanded 使地图吃掉除指令栏外的全部高度。
         Expanded(
-          child: Stack(
-            children: [
-              Positioned.fill(child: _buildMapArea()),
-              if (search != null) ..._buildOverlays(search),
-            ],
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final width = constraints.maxWidth;
+              final height = constraints.maxHeight;
+              if (width.isFinite && height.isFinite) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) _onMapSizeChanged(Size(width, height));
+                });
+              }
+              return Stack(
+                children: [
+                  Positioned.fill(child: _buildMapArea()),
+                  if (search != null) ..._buildOverlays(search),
+                ],
+              );
+            },
           ),
         ),
         // 指令栏不参与地图区域的尺寸计算，始终贴底。
@@ -383,12 +414,46 @@ class _ExplorePageState extends State<ExplorePage> {
     );
   }
 
-  /// 构造当前结果对应的标记集合，并同步 marker id → place 映射。
-  ///
-  /// 同一批结果只构造一次：`Marker` 的 id 在构造时生成且不可指定，重复构造会让
-  /// 插件把「同一批地点」判定为全删全增，地图上出现可见闪烁。
+  /// 使用原始搜索结果更新自动 marker 选择；结果抽屉仍直接使用 visiblePlaces。
+  void _refreshMarkerSelection() {
+    final size = _mapSize;
+    final position = _lastCameraPosition ?? AmapSurface.initialCamera;
+    if (size == null || size.width <= 0 || size.height <= 0) return;
+    final query = buildMapViewportQuery(
+      latitude: position.target.latitude,
+      longitude: position.target.longitude,
+      zoom: position.zoom,
+      width: size.width,
+      height: size.height,
+    );
+    if (query == null) return;
+    final currentState = _search?.state;
+    final candidateIdentity = currentState is PlaceSearchLoaded
+        ? currentState.queryKey ?? currentState.keywords
+        : 'search';
+    final selection = selectMapMarkers(
+      places: _search?.visiblePlaces ?? const <Place>[],
+      context: MapMarkerSelectionContext(
+        centerLatitude: query.center.latitude,
+        centerLongitude: query.center.longitude,
+        zoom: query.zoom,
+        width: query.width,
+        height: query.height,
+        metersPerPixel: query.metersPerPixel,
+        candidateIdentity: candidateIdentity,
+        queryRadiusMeters: query.radiusMeters.toDouble(),
+      ),
+    );
+    if (_markerSelection?.selectionKey != selection.selectionKey) {
+      _markerSelection = selection;
+      _markersSource = null;
+      if (mounted) setState(() {});
+    }
+  }
+
+  /// 构造已筛选结果对应的标记集合，并同步 marker id → 地点映射。
   Set<Marker> _resolveMarkers() {
-    final places = _search?.visiblePlaces ?? const <Place>[];
+    final places = _markerSelection?.places ?? const <Place>[];
     if (places.isEmpty) {
       if (_markersSource != null) {
         _markersSource = null;
@@ -398,7 +463,7 @@ class _ExplorePageState extends State<ExplorePage> {
       return _markers;
     }
 
-    if (identical(_markersSource, places)) return _markers;
+    if (_markersSource == _markerSelection?.selectionKey) return _markers;
 
     _placeByMarkerId.clear();
     final markers = <Marker>{};
@@ -416,7 +481,7 @@ class _ExplorePageState extends State<ExplorePage> {
       _placeByMarkerId[marker.id] = place;
       markers.add(marker);
     }
-    _markersSource = places;
+    _markersSource = _markerSelection?.selectionKey;
     _markers = Set.unmodifiable(markers);
     return _markers;
   }

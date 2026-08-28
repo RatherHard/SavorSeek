@@ -68,7 +68,9 @@ class _AddStopSheetState extends State<_AddStopSheet> {
   final _titleController = TextEditingController();
   final _noteController = TextEditingController();
 
-  late TripDayRef _day = widget.trip.days.first;
+  late TripDayRef _day = widget.trip.days.isEmpty
+      ? TripDayRef(localDate: DateUtils.dateOnly(DateTime.now()))
+      : widget.trip.days.first;
   TimeOfDay _time = const TimeOfDay(hour: 12, minute: 0);
   Duration _duration = defaultTripStopDuration;
   Place? _place;
@@ -98,18 +100,16 @@ class _AddStopSheetState extends State<_AddStopSheet> {
   }
 
   Future<void> _pickDate() async {
+    final today = DateTime.now();
     final picked = await showDatePicker(
       context: context,
       initialDate: _day.localDate,
-      firstDate: widget.trip.firstDate,
-      lastDate: widget.trip.lastDate,
-      selectableDayPredicate: (date) => widget.trip.dayOn(date) != null,
-      helpText: '选择行程中的哪一天',
+      firstDate: DateTime(today.year - 10, today.month, today.day),
+      lastDate: DateTime(today.year + 10, today.month, today.day),
+      helpText: '选择节点日期',
     );
     if (picked == null || !mounted) return;
-    final day = widget.trip.dayOn(picked);
-    if (day == null) return;
-    setState(() => _day = day);
+    setState(() => _day = TripDayRef(localDate: DateUtils.dateOnly(picked)));
   }
 
   Future<void> _pickTime() async {
@@ -153,7 +153,6 @@ class _AddStopSheetState extends State<_AddStopSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final insets = MediaQuery.viewInsetsOf(context);
-    final canPickDate = widget.trip.days.length > 1;
 
     return Padding(
       padding: EdgeInsets.only(bottom: insets.bottom),
@@ -214,7 +213,7 @@ class _AddStopSheetState extends State<_AddStopSheet> {
                   icon: Icons.event_outlined,
                   label: '日期',
                   value: formatLocalDate(_day.localDate),
-                  onTap: canPickDate ? _pickDate : null,
+                  onTap: _pickDate,
                 ),
                 const Divider(height: 1),
                 _PickerTile(

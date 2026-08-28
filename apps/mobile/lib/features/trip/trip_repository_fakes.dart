@@ -27,10 +27,8 @@ class InMemoryTripRepository implements TripRepository {
       TripSummary(
         id: current.id,
         title: current.title,
-        startDate: current.days.isEmpty
-            ? DateTime.now()
-            : current.days.first.date,
-        endDate: current.days.isEmpty ? DateTime.now() : current.days.last.date,
+        startDate: current.days.isEmpty ? null : current.days.first.date,
+        endDate: current.days.isEmpty ? null : current.days.last.date,
         timezone: current.timezone,
         status: current.status,
         updatedAt: current.updatedAt,
@@ -68,8 +66,8 @@ class DemoTripRepository implements TripRepository {
       TripSummary(
         id: plan.id,
         title: plan.title,
-        startDate: plan.days.first.date,
-        endDate: plan.days.last.date,
+        startDate: plan.days.isEmpty ? null : plan.days.first.date,
+        endDate: plan.days.isEmpty ? null : plan.days.last.date,
         timezone: plan.timezone,
         status: plan.status,
         updatedAt: plan.updatedAt,

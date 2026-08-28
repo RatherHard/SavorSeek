@@ -34,7 +34,7 @@ abstract interface class TripWriter {
     required String tripId,
     required int expectedRevision,
     required String tripItemId,
-    required String tripDayId,
+    required DateTime localDate,
     required DateTime plannedStartAt,
     required DateTime plannedEndAt,
     required TripStopType timeSlot,
@@ -48,7 +48,7 @@ abstract interface class TripWriter {
     required String tripItemId,
     required String title,
     String? notes,
-    required String tripDayId,
+    required DateTime localDate,
     required DateTime plannedStartAt,
     required DateTime plannedEndAt,
     required TripStopType timeSlot,
@@ -102,7 +102,7 @@ abstract interface class TripWriter {
   Future<TripWriteResult> addBreakItem({
     required String tripId,
     required int expectedRevision,
-    required String tripDayId,
+    required DateTime localDate,
     required String title,
     required DateTime plannedStartAt,
     required DateTime plannedEndAt,
@@ -119,7 +119,7 @@ abstract interface class TripWriter {
   Future<TripWriteResult> addPlaceItem({
     required String tripId,
     required int expectedRevision,
-    required String tripDayId,
+    required DateTime localDate,
     required String placeId,
     required String title,
     required DateTime plannedStartAt,
@@ -195,15 +195,20 @@ class TripSummary {
   final String id;
   final String title;
 
-  /// 行程时区下的起止自然日。
-  final DateTime startDate;
-  final DateTime endDate;
+  /// 行程时区下的起止自然日；没有节点的行程为空。
+  final DateTime? startDate;
+  final DateTime? endDate;
   final String timezone;
   final TripStatus status;
   final DateTime? updatedAt;
 
-  /// 行程横跨的天数，含首尾两端。
-  int get dayCount => endDate.difference(startDate).inDays + 1;
+  /// 行程横跨的天数，含首尾两端；没有节点时为 0。
+  int get dayCount {
+    final start = startDate;
+    final end = endDate;
+    if (start == null || end == null) return 0;
+    return end.difference(start).inDays + 1;
+  }
 }
 
 /// 基于自建 Supabase 的行程仓库。
@@ -257,8 +262,12 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
             (row) => TripSummary(
               id: row['id'] as String,
               title: (row['title'] as String?) ?? '未命名行程',
-              startDate: DateTime.parse(row['start_date'] as String),
-              endDate: DateTime.parse(row['end_date'] as String),
+              startDate: row['start_date'] is String
+                  ? DateTime.parse(row['start_date'] as String)
+                  : null,
+              endDate: row['end_date'] is String
+                  ? DateTime.parse(row['end_date'] as String)
+                  : null,
               timezone: (row['timezone'] as String?) ?? 'Asia/Shanghai',
               status: TripMapper.tripStatusFromWire(row['status'] as String?),
               updatedAt: row['updated_at'] is String
@@ -283,8 +292,8 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
   /// `trips_budget_scope_ck` 要求两者共存亡，只给其一会被拒。
   Future<TripWriteResult> createTrip({
     required String title,
-    required DateTime startDate,
-    required DateTime endDate,
+    DateTime? startDate,
+    DateTime? endDate,
     String timezone = 'Asia/Shanghai',
     int partySize = 1,
     int? budgetLimitMinor,
@@ -296,8 +305,8 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
       'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
       'p_title': title,
       'p_timezone': timezone,
-      'p_start_date': _formatDate(startDate),
-      'p_end_date': _formatDate(endDate),
+      'p_start_date': startDate == null ? null : _formatDate(startDate),
+      'p_end_date': endDate == null ? null : _formatDate(endDate),
       'p_party_size': partySize,
       'p_budget_limit_minor': budgetLimitMinor,
       // 预算为空时 scope 也必须为空，否则触发 trips_budget_scope_ck。
@@ -310,14 +319,8 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     );
   }
 
-  /// 创建行程并按日期区间补齐每一天。
-  ///
-  /// 两次 RPC 之间没有事务包裹，因此幂等键必须由调用方复用：网络中断后重试时，
-  /// 同一把键会命中 `trip_idempotency_keys` 返回原结果，而不是创建第二个行程。
-  /// 键在首次调用时生成并缓存于 [keys]，重试请传入同一个实例。
-  ///
-  /// 逐天调用 `add_trip_day` 且每次都用上一次返回的 revision：该 RPC 会把
-  /// `trips.revision` 自增，沿用旧值会在第二天触发 P0002 冲突。
+  /// 兼容旧调用方：日期现在由节点决定，因此只创建空行程，不再预创建行程日。
+  @Deprecated('行程日期由节点自动决定，请直接调用 createTrip')
   Future<TripWriteResult> createTripWithDays({
     required String title,
     required DateTime startDate,
@@ -326,30 +329,14 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     int partySize = 1,
     int? budgetLimitMinor,
     String timezone = 'Asia/Shanghai',
-  }) async {
-    final created = await createTrip(
+  }) {
+    return createTrip(
       title: title,
-      startDate: startDate,
-      endDate: endDate,
       timezone: timezone,
       partySize: partySize,
       budgetLimitMinor: budgetLimitMinor,
       idempotencyKey: keys.trip,
     );
-
-    var revision = created.revision;
-    final dayCount = endDate.difference(startDate).inDays + 1;
-    for (var offset = 0; offset < dayCount; offset++) {
-      final result = await addTripDay(
-        tripId: created.id,
-        expectedRevision: revision,
-        localDate: startDate.add(Duration(days: offset)),
-        idempotencyKey: keys.dayKeyAt(offset),
-      );
-      revision = result.revision;
-    }
-
-    return TripWriteResult(id: created.id, revision: revision);
   }
 
   /// 添加一天。[expectedRevision] 取自 `trips.revision`，不匹配时抛
@@ -377,29 +364,25 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
 
   /// 改期：调整行程项的日期、时间与时段。
   ///
-  /// 允许跨天移动（[tripDayId] 传目标日）。不接受 position 参数：跨天后的新位置
-  /// 由服务端按目标日实际占用计算，客户端算出的值在并发下必然过期。
-  ///
-  /// 时间必须已按行程时区折算（见 `TripTimeZone.toInstant`）：库端校验开始时刻
-  /// 折回行程时区后的日期须等于目标日的 local_date，不符返回 23514。
+  /// 目标日期可尚未存在对应的 trip_day；服务端会在同一事务中创建并重算行程区间。
   @override
   Future<TripWriteResult> rescheduleTripItem({
     required String tripId,
     required int expectedRevision,
     required String tripItemId,
-    required String tripDayId,
+    required DateTime localDate,
     required DateTime plannedStartAt,
     required DateTime plannedEndAt,
     required TripStopType timeSlot,
     String? idempotencyKey,
   }) async {
     _requireSession();
-    final payload = await _rpc('reschedule_trip_item', {
+    final payload = await _rpc('reschedule_trip_item_on_date', {
       'p_trip_id': tripId,
       'p_expected_revision': expectedRevision,
       'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
       'p_trip_item_id': tripItemId,
-      'p_trip_day_id': tripDayId,
+      'p_local_date': _formatDate(localDate),
       'p_planned_start_at': plannedStartAt.toUtc().toIso8601String(),
       'p_planned_end_at': plannedEndAt.toUtc().toIso8601String(),
       'p_time_slot': timeSlot.wireName,
@@ -418,21 +401,21 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     required String tripItemId,
     required String title,
     String? notes,
-    required String tripDayId,
+    required DateTime localDate,
     required DateTime plannedStartAt,
     required DateTime plannedEndAt,
     required TripStopType timeSlot,
     String? idempotencyKey,
   }) async {
     _requireSession();
-    final payload = await _rpc('edit_trip_item', {
+    final payload = await _rpc('edit_trip_item_on_date', {
       'p_trip_id': tripId,
       'p_expected_revision': expectedRevision,
       'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
       'p_trip_item_id': tripItemId,
       'p_title': title,
       'p_notes': notes ?? '',
-      'p_trip_day_id': tripDayId,
+      'p_local_date': _formatDate(localDate),
       'p_planned_start_at': plannedStartAt.toUtc().toIso8601String(),
       'p_planned_end_at': plannedEndAt.toUtc().toIso8601String(),
       'p_time_slot': timeSlot.wireName,
@@ -585,7 +568,7 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
   Future<TripWriteResult> addTripItem({
     required String tripId,
     required int expectedRevision,
-    required String tripDayId,
+    required DateTime localDate,
     required String title,
     required DateTime plannedStartAt,
     required DateTime plannedEndAt,
@@ -605,11 +588,11 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     } else if (placeId != null || placeSnapshot != null) {
       throw const TripRepositoryException('休息项不能关联地点。');
     }
-    final payload = await _rpc('add_trip_item', {
+    final payload = await _rpc('add_trip_item_on_date', {
       'p_trip_id': tripId,
       'p_expected_revision': expectedRevision,
       'p_idempotency_key': idempotencyKey ?? generateUuidV4(),
-      'p_trip_day_id': tripDayId,
+      'p_local_date': _formatDate(localDate),
       'p_item_type': itemType.wireName,
       'p_place_id': placeId,
       'p_title': title,
@@ -626,13 +609,7 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     );
   }
 
-  /// 读取「最近更新的行程」的排期上下文：行程本身加上它的全部日期。
-  ///
-  /// 为什么不复用 [loadPlan]：`TripPlan` 是展示模型，不含 `revision` 与
-  /// `trip_days.id`，而 `add_trip_item` 两者都必需。这里单独取最小字段集，避免
-  /// 为了一次写入把并发控制字段渗进 UI 模型。
-  ///
-  /// 返回 null 表示用户还没有行程或行程还没有任何一天，调用方应引导其先创建。
+  /// 无节点的行程仍可排期：服务端会在写入节点时物化目标行程日。
   Future<TripSchedulingContext?> findSchedulingContext() async {
     _requireSession();
     try {
@@ -657,7 +634,6 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
               )
               .toList()
             ..sort((a, b) => a.localDate.compareTo(b.localDate));
-      if (days.isEmpty) return null;
       return TripSchedulingContext(
         tripId: row['id'] as String,
         revision: (row['revision'] as num).toInt(),
@@ -674,12 +650,12 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     }
   }
 
-  /// 添加一个自由安排节点。position 由调用方经 [countItemsOnDay] 推导后传入。
+  /// 添加一个自由安排节点。position 由服务端在目标日期内计算。
   @override
   Future<TripWriteResult> addBreakItem({
     required String tripId,
     required int expectedRevision,
-    required String tripDayId,
+    required DateTime localDate,
     required String title,
     required DateTime plannedStartAt,
     required DateTime plannedEndAt,
@@ -687,11 +663,11 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     String? notes,
     String? idempotencyKey,
   }) async {
-    final position = await countItemsOnDay(tripDayId);
+    final position = 0;
     return addTripItem(
       tripId: tripId,
       expectedRevision: expectedRevision,
-      tripDayId: tripDayId,
+      localDate: localDate,
       title: title,
       plannedStartAt: plannedStartAt,
       plannedEndAt: plannedEndAt,
@@ -712,7 +688,7 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
   Future<TripWriteResult> addPlaceItem({
     required String tripId,
     required int expectedRevision,
-    required String tripDayId,
+    required DateTime localDate,
     required String placeId,
     required String title,
     required DateTime plannedStartAt,
@@ -723,13 +699,13 @@ class SupabaseTripRepository implements TripRepository, TripWriter {
     String? notes,
     String? idempotencyKey,
   }) async {
-    final position = await countItemsOnDay(tripDayId);
+    final position = 0;
     // 坐标成对齐全才写入：库端要求两者同时给出或同时省略，只给其一会被拒。
     final hasCoordinates = latitude != null && longitude != null;
     return addTripItem(
       tripId: tripId,
       expectedRevision: expectedRevision,
-      tripDayId: tripDayId,
+      localDate: localDate,
       title: title,
       plannedStartAt: plannedStartAt,
       plannedEndAt: plannedEndAt,
@@ -930,9 +906,10 @@ class CreateTripKeys {
 /// 行程中的一天，供排期时选择。
 @immutable
 class TripDayRef {
-  const TripDayRef({required this.id, required this.localDate});
+  const TripDayRef({this.id, required this.localDate});
 
-  final String id;
+  /// 已持久化的行程日 id；目标日期尚未写入时为空。
+  final String? id;
 
   /// 该天在行程时区下的日期。
   final DateTime localDate;
@@ -945,38 +922,31 @@ class TripSchedulingContext {
     required this.tripId,
     required this.revision,
     required this.timezone,
-    required this.days,
+    this.days = const [],
   });
 
   final String tripId;
 
-  /// 乐观并发控制的期望修订号，作为 `add_trip_item` 的 `p_expected_revision`。
+  /// 乐观并发控制的期望修订号。
   final int revision;
 
-  /// 行程时区。库端 trigger 会校验「项的开始时刻按此时区折算后的日期」必须等于
-  /// 所属 trip_day 的 local_date（itinerary_schema.sql:232），因此排时间时不能
-  /// 用设备本地时区。
+  /// 行程时区。节点日期与时刻都按此时区解释。
   final String timezone;
 
-  /// 行程的全部日期，已按 local_date 升序。
-  ///
-  /// 时间选择只能落在这些日期上：库端约束要求项归属的那一天必须已存在，
-  /// 任意日期会被 trigger 拒绝。
+  /// 已持久化且按 local_date 升序的行程日。空行程允许为空。
   final List<TripDayRef> days;
 
-  DateTime get firstDate => days.first.localDate;
-  DateTime get lastDate => days.last.localDate;
-
-  /// 找出某个日期对应的行程日。不存在时返回 null。
-  TripDayRef? dayOn(DateTime localDate) {
+  /// 找出某个日期对应的现有行程日；日期尚未持久化时返回临时引用。
+  TripDayRef dayOn(DateTime localDate) {
+    final date = DateTime(localDate.year, localDate.month, localDate.day);
     for (final day in days) {
-      if (day.localDate.year == localDate.year &&
-          day.localDate.month == localDate.month &&
-          day.localDate.day == localDate.day) {
+      if (day.localDate.year == date.year &&
+          day.localDate.month == date.month &&
+          day.localDate.day == date.day) {
         return day;
       }
     }
-    return null;
+    return TripDayRef(localDate: date);
   }
 }
 

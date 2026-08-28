@@ -19,11 +19,19 @@ void main() {
   });
 
   test('larger zoom produces a smaller radius', () {
-    final wide = buildMapViewportQuery(latitude: 38, longitude: 121, zoom: 10)!;
+    final wide = buildMapViewportQuery(
+      latitude: 38,
+      longitude: 121,
+      zoom: 10,
+      width: 360,
+      height: 640,
+    )!;
     final close = buildMapViewportQuery(
       latitude: 38,
       longitude: 121,
       zoom: 15,
+      width: 360,
+      height: 640,
     )!;
 
     expect(close.radiusMeters, lessThan(wide.radiusMeters));
@@ -43,15 +51,33 @@ void main() {
 
   test('rejects invalid camera and dimensions', () {
     expect(
-      buildMapViewportQuery(latitude: double.nan, longitude: 121, zoom: 13),
+      buildMapViewportQuery(
+        latitude: double.nan,
+        longitude: 121,
+        zoom: 13,
+        width: 360,
+        height: 640,
+      ),
       isNull,
     );
     expect(
-      buildMapViewportQuery(latitude: 91, longitude: 121, zoom: 13),
+      buildMapViewportQuery(
+        latitude: 91,
+        longitude: 121,
+        zoom: 13,
+        width: 360,
+        height: 640,
+      ),
       isNull,
     );
     expect(
-      buildMapViewportQuery(latitude: 38, longitude: 121, zoom: 13, width: 0),
+      buildMapViewportQuery(
+        latitude: 38,
+        longitude: 121,
+        zoom: 13,
+        width: 0,
+        height: 640,
+      ),
       isNull,
     );
   });
@@ -61,11 +87,15 @@ void main() {
       latitude: 38.91401,
       longitude: 121.61465,
       zoom: 13.0,
+      width: 360,
+      height: 640,
     )!;
     final second = buildMapViewportQuery(
       latitude: 38.91402,
       longitude: 121.61468,
       zoom: 13.01,
+      width: 360,
+      height: 640,
     )!;
 
     expect(second.key, first.key);

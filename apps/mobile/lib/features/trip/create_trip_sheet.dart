@@ -9,16 +9,12 @@ import 'timezone_picker_sheet.dart';
 class CreateTripDraft {
   const CreateTripDraft({
     required this.title,
-    required this.startDate,
-    required this.endDate,
     required this.partySize,
     this.budgetLimitMinor,
     this.timezone = 'Asia/Shanghai',
   });
 
   final String title;
-  final DateTime startDate;
-  final DateTime endDate;
   final int partySize;
 
   /// 预算上限，以分为单位。
@@ -62,8 +58,6 @@ class _CreateTripSheetState extends State<_CreateTripSheet> {
   final _titleController = TextEditingController();
   final _budgetController = TextEditingController();
 
-  late DateTime _startDate;
-  late DateTime _endDate;
   int _partySize = 2;
 
   /// 行程时区，默认与库端默认值一致。
@@ -72,9 +66,6 @@ class _CreateTripSheetState extends State<_CreateTripSheet> {
   @override
   void initState() {
     super.initState();
-    final today = DateTime.now();
-    _startDate = DateTime(today.year, today.month, today.day);
-    _endDate = _startDate;
   }
 
   @override
@@ -82,24 +73,6 @@ class _CreateTripSheetState extends State<_CreateTripSheet> {
     _titleController.dispose();
     _budgetController.dispose();
     super.dispose();
-  }
-
-  Future<void> _pickDateRange() async {
-    final today = DateTime.now();
-    final picked = await showDateRangePicker(
-      context: context,
-      initialDateRange: DateTimeRange(start: _startDate, end: _endDate),
-      // 允许选今天之前：用户可能在补录已发生的行程。
-      firstDate: DateTime(today.year - 1),
-      lastDate: DateTime(today.year + 3),
-      helpText: '选择行程日期',
-      saveText: '确定',
-    );
-    if (picked == null) return;
-    setState(() {
-      _startDate = DateUtils.dateOnly(picked.start);
-      _endDate = DateUtils.dateOnly(picked.end);
-    });
   }
 
   Future<void> _pickTimezone() async {
@@ -117,8 +90,6 @@ class _CreateTripSheetState extends State<_CreateTripSheet> {
     Navigator.of(context).pop(
       CreateTripDraft(
         title: _titleController.text.trim(),
-        startDate: _startDate,
-        endDate: _endDate,
         partySize: _partySize,
         // 元转分：四舍五入而非截断，避免 99.99 元变成 9998 分。
         budgetLimitMinor: budgetYuan == null
@@ -147,7 +118,12 @@ class _CreateTripSheetState extends State<_CreateTripSheet> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('规划一段美食行程', style: theme.textTheme.titleLarge),
-                const SizedBox(height: AppTokens.spaceLg),
+                Text(
+                  '先创建行程，再添加节点；日期会根据节点自动生成。',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
                 TextFormField(
                   controller: _titleController,
                   maxLength: _titleMaxLength,
@@ -166,12 +142,6 @@ class _CreateTripSheetState extends State<_CreateTripSheet> {
                   },
                 ),
                 const SizedBox(height: AppTokens.spaceSm),
-                _FieldTile(
-                  icon: Icons.date_range_outlined,
-                  label: '日期',
-                  value: formatTripRange(_startDate, _endDate),
-                  onTap: _pickDateRange,
-                ),
                 _FieldTile(
                   icon: Icons.public,
                   label: '时区',

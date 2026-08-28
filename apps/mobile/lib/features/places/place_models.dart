@@ -15,6 +15,7 @@ class Place {
     this.address,
     this.latitude,
     this.longitude,
+    this.rating,
   }) : assert((latitude == null) == (longitude == null), '经纬度必须同时提供或同时省略');
 
   final String id;
@@ -26,6 +27,9 @@ class Place {
   final double? latitude;
   final double? longitude;
 
+  /// 高德 POI 商业扩展中的评分；缺失或异常时为 null。
+  final double? rating;
+
   /// 该地点信息的抓取时间，用于向用户说明「信息更新于 X」。
   ///
   /// 可解释性要求：推荐与地点信息必须给出时效提示（PRD 可解释性一节），
@@ -33,6 +37,12 @@ class Place {
   final DateTime fetchedAt;
 
   bool get hasCoordinates => latitude != null && longitude != null;
+
+  /// 该地点是否有可用于地图筛选的高德评分。
+  bool get hasValidRating {
+    final value = rating;
+    return value != null && value.isFinite && value >= 0 && value <= 5;
+  }
 
   /// 类别的展示形式。高德用 `;` 分层，最末一级最具体，取它最贴近用户认知。
   String? get primaryCategory {
@@ -51,6 +61,7 @@ class Place {
       // numeric 列经 JSON 传输后可能是 num 或 String，两种都要接住。
       latitude: _readDouble(json['latitude']),
       longitude: _readDouble(json['longitude']),
+      rating: _readDouble(json['rating']),
       fetchedAt: DateTime.parse(json['fetched_at'] as String).toLocal(),
     );
   }

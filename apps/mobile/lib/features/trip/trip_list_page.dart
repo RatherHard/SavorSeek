@@ -124,14 +124,12 @@ class _TripListPageState extends State<TripListPage> {
     // 幂等键在本次操作内固定：冲突重试时复用，避免创建出第二个行程。
     final keys = CreateTripKeys();
     try {
-      await repository.createTripWithDays(
+      await repository.createTrip(
         title: draft.title,
-        startDate: draft.startDate,
-        endDate: draft.endDate,
+        timezone: draft.timezone,
         partySize: draft.partySize,
         budgetLimitMinor: draft.budgetLimitMinor,
-        timezone: draft.timezone,
-        keys: keys,
+        idempotencyKey: keys.trip,
       );
       if (!mounted) return;
       await _controller.load();
@@ -349,8 +347,7 @@ class _TripCard extends StatelessWidget {
                     ),
                     const SizedBox(height: AppTokens.spaceXs),
                     Text(
-                      '${_formatDate(trip.startDate)} – '
-                      '${_formatDate(trip.endDate)} · 共 ${trip.dayCount} 天',
+                      _dateSummary(trip),
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: scheme.onSurfaceVariant,
                       ),
@@ -370,6 +367,13 @@ class _TripCard extends StatelessWidget {
     final month = date.month.toString().padLeft(2, '0');
     final day = date.day.toString().padLeft(2, '0');
     return '${date.year}-$month-$day';
+  }
+
+  static String _dateSummary(TripSummary trip) {
+    final start = trip.startDate;
+    final end = trip.endDate;
+    if (start == null || end == null) return '日期待安排';
+    return '${_formatDate(start)} – ${_formatDate(end)} · 共 ${trip.dayCount} 天';
   }
 }
 

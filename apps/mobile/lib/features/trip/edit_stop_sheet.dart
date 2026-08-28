@@ -75,7 +75,10 @@ class _EditStopSheetState extends State<_EditStopSheet> {
     for (final day in widget.trip.days) {
       if (day.id == widget.stop.tripDayId) return day;
     }
-    return widget.trip.days.first;
+    return TripDayRef(
+      id: widget.stop.tripDayId,
+      localDate: DateUtils.dateOnly(widget.stop.startAt),
+    );
   }
 
   @override
@@ -86,18 +89,16 @@ class _EditStopSheetState extends State<_EditStopSheet> {
   }
 
   Future<void> _pickDate() async {
+    final today = DateTime.now();
     final picked = await showDatePicker(
       context: context,
       initialDate: _day.localDate,
-      firstDate: widget.trip.firstDate,
-      lastDate: widget.trip.lastDate,
-      selectableDayPredicate: (date) => widget.trip.dayOn(date) != null,
-      helpText: '选择行程中的哪一天',
+      firstDate: DateTime(today.year - 10, today.month, today.day),
+      lastDate: DateTime(today.year + 10, today.month, today.day),
+      helpText: '选择节点日期',
     );
-    if (picked == null) return;
-    final day = widget.trip.dayOn(picked);
-    if (day == null) return;
-    setState(() => _day = day);
+    if (picked == null || !mounted) return;
+    setState(() => _day = TripDayRef(localDate: DateUtils.dateOnly(picked)));
   }
 
   Future<void> _pickTime() async {
@@ -140,7 +141,6 @@ class _EditStopSheetState extends State<_EditStopSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final insets = MediaQuery.viewInsetsOf(context);
-    final canPickDate = widget.trip.days.length > 1;
 
     return Padding(
       padding: EdgeInsets.only(bottom: insets.bottom),
@@ -192,7 +192,7 @@ class _EditStopSheetState extends State<_EditStopSheet> {
                   icon: Icons.event_outlined,
                   label: '日期',
                   value: formatLocalDate(_day.localDate),
-                  onTap: canPickDate ? _pickDate : null,
+                  onTap: _pickDate,
                 ),
                 _PickerTile(
                   icon: Icons.schedule_outlined,

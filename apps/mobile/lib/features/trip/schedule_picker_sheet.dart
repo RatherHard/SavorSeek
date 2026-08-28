@@ -18,10 +18,7 @@ class ScheduleSelection {
     required this.duration,
   });
 
-  /// 所选的行程日。
-  ///
-  /// 只能取自行程已有的天：库端要求项归属的 trip_day 必须已存在，且项的开始时刻
-  /// 按行程时区折算后必须落在该天（itinerary_schema.sql:232）。
+  /// 所选的行程当地自然日。该日尚未有 trip_day 时由服务端在写入节点时创建。
   final TripDayRef day;
 
   /// 行程时区下的墙上时间，不是设备本地时间。
@@ -120,7 +117,11 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
     super.initState();
     final initial = widget.initial;
     // 改期时以现有排期为初值；新加入时默认首日 12:00。
-    _day = initial?.day ?? widget.trip.days.first;
+    _day =
+        initial?.day ??
+        (widget.trip.days.isEmpty
+            ? TripDayRef(localDate: DateUtils.dateOnly(DateTime.now()))
+            : widget.trip.days.first);
     _time = initial == null
         ? const TimeOfDay(hour: 12, minute: 0)
         : TimeOfDay(hour: initial.hour, minute: initial.minute);
@@ -128,20 +129,16 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
   }
 
   Future<void> _pickDate() async {
+    final today = DateTime.now();
     final picked = await showDatePicker(
       context: context,
       initialDate: _day.localDate,
-      // 只允许在行程既有的日期区间内选择，且逐日校验：库端要求对应的
-      // trip_day 必须已存在，选到不存在的日期会被 trigger 拒绝。
-      firstDate: widget.trip.firstDate,
-      lastDate: widget.trip.lastDate,
-      selectableDayPredicate: (date) => widget.trip.dayOn(date) != null,
-      helpText: '选择行程中的哪一天',
+      firstDate: DateTime(today.year - 10, today.month, today.day),
+      lastDate: DateTime(today.year + 10, today.month, today.day),
+      helpText: '选择节点日期',
     );
     if (picked == null) return;
-    final day = widget.trip.dayOn(picked);
-    if (day == null) return;
-    setState(() => _day = day);
+    setState(() => _day = TripDayRef(localDate: DateUtils.dateOnly(picked)));
   }
 
   Future<void> _pickTime() async {
@@ -209,7 +206,6 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final slot = timeSlotForHour(_time.hour);
-    final canPickDate = widget.trip.days.length > 1;
     final scheduleRange = formatScheduleRange(
       localDate: _day.localDate,
       hour: _time.hour,
@@ -243,9 +239,8 @@ class _SchedulePickerSheetState extends State<_SchedulePickerSheet> {
               icon: Icons.event_outlined,
               label: '日期',
               value: formatLocalDate(_day.localDate),
-              // 单日行程无从选择，禁用比给一个只有一个选项的弹窗更诚实。
-              onTap: canPickDate ? _pickDate : null,
-              hint: canPickDate ? null : '该行程只有一天',
+              onTap: _pickDate,
+              hint: null,
             ),
             const Divider(height: 1),
             _PickerRow(

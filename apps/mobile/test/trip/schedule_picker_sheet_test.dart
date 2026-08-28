@@ -160,7 +160,7 @@ void main() {
       await tester.pumpWidget(wrap(buildTrip(dayCount: 1), (_) {}));
       await openSheet(tester);
 
-      expect(find.byIcon(Icons.chevron_right), findsNWidgets(2));
+      expect(find.byIcon(Icons.chevron_right), findsNWidgets(3));
     });
 
     testWidgets('多日行程可选日期', (tester) async {

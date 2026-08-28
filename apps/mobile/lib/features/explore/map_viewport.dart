@@ -14,12 +14,18 @@ class MapViewportQuery {
     required this.center,
     required this.zoom,
     required this.radiusMeters,
+    required this.metersPerPixel,
+    required this.width,
+    required this.height,
     required this.key,
   });
 
   final MapViewportCenter center;
   final double zoom;
   final int radiusMeters;
+  final double metersPerPixel;
+  final double width;
+  final double height;
   final String key;
 }
 
@@ -32,8 +38,8 @@ MapViewportQuery? buildMapViewportQuery({
   required double latitude,
   required double longitude,
   required double zoom,
-  double width = 360,
-  double height = 640,
+  required double width,
+  required double height,
 }) {
   if (!_isFinite(latitude) || !_isFinite(longitude) || !_isFinite(zoom)) {
     return null;
@@ -57,9 +63,11 @@ MapViewportQuery? buildMapViewportQuery({
   final normalizedLongitude = _round(longitude, 4);
   final normalizedZoom = _round(zoom, 1);
   final normalizedRadius = math.max(1, _roundTo(radiusMeters, 100));
+  final normalizedWidth = _round(width, 1);
+  final normalizedHeight = _round(height, 1);
   final key =
       '$normalizedLatitude:$normalizedLongitude:'
-      '$normalizedZoom:$normalizedRadius';
+      '$normalizedZoom:$normalizedRadius:$normalizedWidth:$normalizedHeight';
 
   return MapViewportQuery(
     center: MapViewportCenter(
@@ -68,6 +76,9 @@ MapViewportQuery? buildMapViewportQuery({
     ),
     zoom: normalizedZoom,
     radiusMeters: normalizedRadius,
+    metersPerPixel: metersPerPixel,
+    width: width,
+    height: height,
     key: key,
   );
 }
