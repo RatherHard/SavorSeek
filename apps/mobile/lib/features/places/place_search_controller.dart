@@ -3,6 +3,9 @@ import 'package:flutter/foundation.dart';
 import 'place_models.dart';
 import 'place_repository.dart';
 
+/// 查询结果的来源。
+enum PlaceSearchSource { keyword, viewport }
+
 /// 探索页的检索状态。
 sealed class PlaceSearchState {
   const PlaceSearchState();
@@ -14,16 +17,27 @@ final class PlaceSearchIdle extends PlaceSearchState {
 }
 
 final class PlaceSearchLoading extends PlaceSearchState {
-  const PlaceSearchLoading(this.keywords);
+  const PlaceSearchLoading(
+    this.keywords, {
+    this.source = PlaceSearchSource.keyword,
+  });
 
   final String keywords;
+  final PlaceSearchSource source;
 }
 
 final class PlaceSearchLoaded extends PlaceSearchState {
-  const PlaceSearchLoaded({required this.keywords, required this.result});
+  const PlaceSearchLoaded({
+    required this.keywords,
+    required this.result,
+    this.source = PlaceSearchSource.keyword,
+    this.queryKey,
+  });
 
   final String keywords;
   final PlaceSearchResult result;
+  final PlaceSearchSource source;
+  final String? queryKey;
 
   List<Place> get places => result.places;
 }
@@ -33,9 +47,13 @@ final class PlaceSearchLoaded extends PlaceSearchState {
 /// 与 [PlaceSearchFailed] 分开是刻意的：设计文档 §12 要求「没有符合条件的地点」
 /// 与「数据源不可用」给出不同提示，合成一个状态就无法区分。
 final class PlaceSearchEmpty extends PlaceSearchState {
-  const PlaceSearchEmpty(this.keywords);
+  const PlaceSearchEmpty(
+    this.keywords, {
+    this.source = PlaceSearchSource.keyword,
+  });
 
   final String keywords;
+  final PlaceSearchSource source;
 }
 
 final class PlaceSearchFailed extends PlaceSearchState {
@@ -43,11 +61,17 @@ final class PlaceSearchFailed extends PlaceSearchState {
     required this.keywords,
     required this.message,
     required this.failure,
+    this.source = PlaceSearchSource.keyword,
+    this.queryKey,
+    this.hasPreviousResult = false,
   });
 
   final String keywords;
   final String message;
   final PlaceSearchFailure failure;
+  final PlaceSearchSource source;
+  final String? queryKey;
+  final bool hasPreviousResult;
 
   /// 是否值得让用户重试。
   ///
@@ -79,6 +103,26 @@ class PlaceSearchController extends ChangeNotifier {
   ///
   /// 连续两次检索时，先发的请求可能后到，若不加判别会用旧结果覆盖新结果。
   int _requestId = 0;
+  String? _lastViewportKey;
+  PlaceSearchResult? _viewportResult;
+  PlaceSearchResult? _keywordResult;
+  String? _lastViewportKeywords;
+  double? _lastViewportLatitude;
+  double? _lastViewportLongitude;
+  int? _lastViewportRadius;
+
+  /// 当前应显示的结果。手动关键词结果优先，视野刷新不会静默替换它。
+  List<Place> get visiblePlaces {
+    final state = _state;
+    if (state case PlaceSearchLoaded(:final places)
+        when state.source == PlaceSearchSource.keyword) {
+      return places;
+    }
+    final keywordResult = _keywordResult;
+    if (keywordResult != null) return keywordResult.places;
+    if (state case PlaceSearchLoaded(:final places)) return places;
+    return _viewportResult?.places ?? const <Place>[];
+  }
 
   PlaceSearchState get state => _state;
 
@@ -87,6 +131,95 @@ class PlaceSearchController extends ChangeNotifier {
 
   bool get isLoading => _state is PlaceSearchLoading;
 
+  bool get isKeywordMode => switch (_state) {
+    PlaceSearchLoading(:final source) ||
+    PlaceSearchLoaded(:final source) ||
+    PlaceSearchEmpty(:final source) ||
+    PlaceSearchFailed(:final source) => source == PlaceSearchSource.keyword,
+    PlaceSearchIdle() => false,
+  };
+
+  bool get hasViewportResult => _viewportResult != null;
+
+  Future<void> searchAround({
+    required double latitude,
+    required double longitude,
+    required int radiusMeters,
+    String? queryKey,
+    String? keywords,
+  }) async {
+    if (queryKey != null && queryKey == _lastViewportKey) return;
+
+    final requestId = ++_requestId;
+    final previous = _viewportResult;
+    final trimmed = keywords?.trim() ?? '';
+    _setState(PlaceSearchLoading(trimmed, source: PlaceSearchSource.viewport));
+
+    try {
+      final result = await _repository.searchAround(
+        latitude: latitude,
+        longitude: longitude,
+        radiusMeters: radiusMeters,
+        keywords: trimmed.isEmpty ? null : trimmed,
+      );
+      if (_isStale(requestId)) return;
+      _viewportResult = result;
+      _lastViewportKey = queryKey;
+      _lastViewportKeywords = trimmed;
+      _lastViewportLatitude = latitude;
+      _lastViewportLongitude = longitude;
+      _lastViewportRadius = radiusMeters;
+      _setState(
+        result.isEmpty
+            ? PlaceSearchEmpty(trimmed, source: PlaceSearchSource.viewport)
+            : PlaceSearchLoaded(
+                keywords: trimmed,
+                result: result,
+                source: PlaceSearchSource.viewport,
+                queryKey: queryKey,
+              ),
+      );
+    } on PlaceSearchException catch (error) {
+      if (_isStale(requestId)) return;
+      if (previous != null && !previous.isEmpty) {
+        _setState(
+          PlaceSearchFailed(
+            keywords: trimmed,
+            message: error.message,
+            failure: error.failure,
+            source: PlaceSearchSource.viewport,
+            queryKey: queryKey,
+            hasPreviousResult: true,
+          ),
+        );
+        return;
+      }
+      _setState(
+        PlaceSearchFailed(
+          keywords: trimmed,
+          message: error.message,
+          failure: error.failure,
+          source: PlaceSearchSource.viewport,
+          queryKey: queryKey,
+        ),
+      );
+    } on Exception {
+      if (_isStale(requestId)) return;
+      _setState(
+        PlaceSearchFailed(
+          keywords: trimmed,
+          message: '地点检索暂时不可用，请稍后重试。',
+          failure: PlaceSearchFailure.storageFailure,
+          source: PlaceSearchSource.viewport,
+          queryKey: queryKey,
+          hasPreviousResult: previous != null && !previous.isEmpty,
+        ),
+      );
+    }
+  }
+
+  List<Place>? get viewportPlaces => _viewportResult?.places;
+
   Future<void> searchByKeywords(String keywords, {String? city}) async {
     final trimmed = keywords.trim();
     if (trimmed.isEmpty) return;
@@ -94,6 +227,7 @@ class PlaceSearchController extends ChangeNotifier {
     final requestId = ++_requestId;
     // 新检索作废旧的选中项：详情面板里的地点可能已不在新结果中。
     _selected = null;
+    _keywordResult = null;
     _setState(PlaceSearchLoading(trimmed));
 
     try {
@@ -102,6 +236,7 @@ class PlaceSearchController extends ChangeNotifier {
         city: city,
       );
       if (_isStale(requestId)) return;
+      _keywordResult = result;
       _setState(
         result.isEmpty
             ? PlaceSearchEmpty(trimmed)
@@ -130,6 +265,27 @@ class PlaceSearchController extends ChangeNotifier {
 
   /// 重试上一次检索。仅在失败或空结果状态下有意义。
   Future<void> retry({String? city}) async {
+    final source = switch (_state) {
+      PlaceSearchFailed(:final source) => source,
+      PlaceSearchEmpty(:final source) => source,
+      _ => null,
+    };
+    if (source == PlaceSearchSource.viewport) {
+      final latitude = _lastViewportLatitude;
+      final longitude = _lastViewportLongitude;
+      final radius = _lastViewportRadius;
+      if (latitude != null && longitude != null && radius != null) {
+        await searchAround(
+          latitude: latitude,
+          longitude: longitude,
+          radiusMeters: radius,
+          queryKey: null,
+          keywords: _lastViewportKeywords,
+        );
+      }
+      return;
+    }
+
     final keywords = switch (_state) {
       PlaceSearchFailed(:final keywords) => keywords,
       PlaceSearchEmpty(:final keywords) => keywords,

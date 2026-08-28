@@ -10,6 +10,7 @@ import 'package:savorseek/features/explore/agent_command_bar.dart';
 import 'package:savorseek/features/explore/amap_consent.dart';
 import 'package:savorseek/features/explore/amap_surface.dart';
 import 'package:savorseek/features/explore/place_results_drawer.dart';
+import 'package:savorseek/features/explore/map_viewport.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 import 'package:savorseek/features/auth/auth_sheet.dart';
 import 'package:savorseek/features/places/favorites_controller.dart';
@@ -83,6 +84,8 @@ class _ExplorePageState extends State<ExplorePage> {
   Object? _markersSource;
 
   AMapController? _mapController;
+  Timer? _viewportDebounce;
+  String? _scheduledViewportKey;
   bool _isAddingToTrip = false;
 
   @override
@@ -101,9 +104,46 @@ class _ExplorePageState extends State<ExplorePage> {
   void _onSearchChanged() => setState(() {});
   void _onFavoritesChanged() => setState(() {});
 
+  void _onCameraMoveEnd(CameraPosition position) {
+    _scheduleViewportSearch(position);
+  }
+
+  void _scheduleViewportSearch(CameraPosition position) {
+    final search = _search;
+    if (search == null || widget.auth?.isSignedIn != true) return;
+
+    _viewportDebounce?.cancel();
+    _viewportDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (!mounted) return;
+      final query = buildMapViewportQuery(
+        latitude: position.target.latitude,
+        longitude: position.target.longitude,
+        zoom: position.zoom,
+        width: 360,
+        height: 640,
+      );
+      if (query == null || query.key == _scheduledViewportKey) return;
+      _scheduledViewportKey = query.key;
+      unawaited(
+        search.searchAround(
+          latitude: query.center.latitude,
+          longitude: query.center.longitude,
+          radiusMeters: query.radiusMeters,
+          queryKey: query.key,
+        ),
+      );
+    });
+  }
+
+  void _onMapCreated(AMapController controller) {
+    _mapController = controller;
+    _scheduleViewportSearch(AmapSurface.initialCamera);
+  }
+
   @override
   void dispose() {
     _consent.removeListener(_onConsentChanged);
+    _viewportDebounce?.cancel();
     if (_ownsConsent) _consent.dispose();
     _search?.removeListener(_onSearchChanged);
     widget.favoriteController?.removeListener(_onFavoritesChanged);
@@ -217,6 +257,7 @@ class _ExplorePageState extends State<ExplorePage> {
   List<Widget> _buildOverlays(PlaceSearchController search) {
     final selected = search.selected;
     final notice = _statusNotice(search);
+    final visiblePlaces = search.visiblePlaces;
 
     return [
       if (search.isLoading)
@@ -235,11 +276,10 @@ class _ExplorePageState extends State<ExplorePage> {
           bottom: AppTokens.spaceMd,
           child: notice,
         ),
-      if (widget.favoriteController != null &&
-          search.state is PlaceSearchLoaded)
+      if (widget.favoriteController != null && visiblePlaces.isNotEmpty)
         Positioned.fill(
           child: PlaceResultsDrawer(
-            places: (search.state as PlaceSearchLoaded).places,
+            places: visiblePlaces,
             favorites: widget.favoriteController!,
             selectedPlaceId: selected?.id,
             onSelect: _selectPlaceFromList,
@@ -337,8 +377,9 @@ class _ExplorePageState extends State<ExplorePage> {
 
     return AmapSurface(
       markers: _resolveMarkers(),
-      onMapCreated: (controller) => _mapController = controller,
+      onMapCreated: _onMapCreated,
       onMapTap: (_) => _search?.clearSelection(),
+      onCameraMoveEnd: _onCameraMoveEnd,
     );
   }
 
@@ -347,9 +388,8 @@ class _ExplorePageState extends State<ExplorePage> {
   /// 同一批结果只构造一次：`Marker` 的 id 在构造时生成且不可指定，重复构造会让
   /// 插件把「同一批地点」判定为全删全增，地图上出现可见闪烁。
   Set<Marker> _resolveMarkers() {
-    final state = _search?.state;
-
-    if (state is! PlaceSearchLoaded) {
+    final places = _search?.visiblePlaces ?? const <Place>[];
+    if (places.isEmpty) {
       if (_markersSource != null) {
         _markersSource = null;
         _markers = const <Marker>{};
@@ -358,11 +398,11 @@ class _ExplorePageState extends State<ExplorePage> {
       return _markers;
     }
 
-    if (identical(_markersSource, state.result)) return _markers;
+    if (identical(_markersSource, places)) return _markers;
 
     _placeByMarkerId.clear();
     final markers = <Marker>{};
-    for (final place in state.places) {
+    for (final place in places) {
       // 无坐标的地点无法落点，跳过而非落在 (0,0)——那会在几内亚湾出现幽灵标记。
       if (!place.hasCoordinates) continue;
       final marker = Marker(
@@ -376,7 +416,7 @@ class _ExplorePageState extends State<ExplorePage> {
       _placeByMarkerId[marker.id] = place;
       markers.add(marker);
     }
-    _markersSource = state.result;
+    _markersSource = places;
     _markers = Set.unmodifiable(markers);
     return _markers;
   }
