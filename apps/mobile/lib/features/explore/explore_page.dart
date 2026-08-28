@@ -115,7 +115,10 @@ class _ExplorePageState extends State<ExplorePage> {
   void _onCameraMoveEnd(CameraPosition position) {
     _lastCameraPosition = position;
     final size = _mapSize;
-    if (size != null) _scheduleViewportSearch(position, size);
+    if (size != null) {
+      _refreshMarkerSelection();
+      _scheduleViewportSearch(position, size);
+    }
   }
 
   void _onMapSizeChanged(Size size) {
@@ -288,7 +291,7 @@ class _ExplorePageState extends State<ExplorePage> {
   List<Widget> _buildOverlays(PlaceSearchController search) {
     final selected = search.selected;
     final notice = _statusNotice(search);
-    final visiblePlaces = search.visiblePlaces;
+    final foodPlaces = filterFoodPlaces(search.visiblePlaces);
 
     return [
       if (search.isLoading)
@@ -307,10 +310,10 @@ class _ExplorePageState extends State<ExplorePage> {
           bottom: AppTokens.spaceMd,
           child: notice,
         ),
-      if (widget.favoriteController != null && visiblePlaces.isNotEmpty)
+      if (widget.favoriteController != null && foodPlaces.isNotEmpty)
         Positioned.fill(
           child: PlaceResultsDrawer(
-            places: visiblePlaces,
+            places: foodPlaces,
             favorites: widget.favoriteController!,
             selectedPlaceId: selected?.id,
             onSelect: _selectPlaceFromList,
@@ -414,7 +417,7 @@ class _ExplorePageState extends State<ExplorePage> {
     );
   }
 
-  /// 使用原始搜索结果更新自动 marker 选择；结果抽屉仍直接使用 visiblePlaces。
+  /// 使用搜索结果更新自动 marker 选择；结果抽屉使用餐饮类别投影。
   void _refreshMarkerSelection() {
     final size = _mapSize;
     final position = _lastCameraPosition ?? AmapSurface.initialCamera;
@@ -455,11 +458,9 @@ class _ExplorePageState extends State<ExplorePage> {
   Set<Marker> _resolveMarkers() {
     final places = _markerSelection?.places ?? const <Place>[];
     if (places.isEmpty) {
-      if (_markersSource != null) {
-        _markersSource = null;
-        _markers = const <Marker>{};
-        _placeByMarkerId.clear();
-      }
+      _markersSource = null;
+      _markers = const <Marker>{};
+      _placeByMarkerId.clear();
       return _markers;
     }
 
@@ -474,8 +475,13 @@ class _ExplorePageState extends State<ExplorePage> {
         position: LatLng(place.latitude!, place.longitude!),
         infoWindow: InfoWindow(
           title: place.name,
-          snippet: place.primaryCategory,
+          snippet: [
+            ?place.primaryCategory,
+            if (place.hasValidRating) '评分 ${place.rating!.toStringAsFixed(1)}',
+          ].join(' · '),
         ),
+        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+        zIndex: place.hasValidRating ? place.rating! : 0,
         onTap: _onMarkerTapped,
       );
       _placeByMarkerId[marker.id] = place;

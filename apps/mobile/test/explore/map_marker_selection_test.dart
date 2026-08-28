@@ -4,9 +4,9 @@ import 'package:savorseek/features/places/place_models.dart';
 
 Place buildPlace({
   required String id,
-  required double latitude,
-  required double longitude,
-  String category = '餐饮服务;中餐厅;烧烤',
+  double? latitude = 38.914,
+  double? longitude = 121.615,
+  String? category = '餐饮服务;中餐厅;烧烤',
   double? rating = 4.0,
 }) {
   return Place(
@@ -37,7 +37,69 @@ MapMarkerSelectionContext context({
 }
 
 void main() {
-  test('keeps only food POIs with valid coordinates and AMap ratings', () {
+  test('filters drawer places by food category while preserving order', () {
+    final unratedFood = buildPlace(
+      id: 'unrated-food',
+      latitude: 38.914,
+      longitude: 121.615,
+      rating: null,
+    );
+    final result = filterFoodPlaces([
+      buildPlace(id: 'food-a', category: '餐饮服务；中餐厅'),
+      buildPlace(id: 'sight', category: '风景名胜;公园'),
+      unratedFood,
+      buildPlace(id: 'unknown', category: null),
+    ]);
+
+    expect(result.map((place) => place.id), ['food-a', 'unrated-food']);
+    expect(() => result.add(buildPlace(id: 'later')), throwsUnsupportedError);
+  });
+
+  test('keeps food places without coordinates in drawer projection', () {
+    final place = Place(
+      id: 'food-without-coordinate',
+      name: '待补坐标的小店',
+      category: '餐饮服务;小吃',
+      rating: 4,
+      fetchedAt: DateTime(2026, 8, 28),
+    );
+
+    expect(filterFoodPlaces([place]), [place]);
+  });
+
+  test('rejects unknown and empty categories in drawer projection', () {
+    final result = filterFoodPlaces([
+      buildPlace(id: 'empty', category: ''),
+      buildPlace(id: 'unknown', category: '购物服务;商场'),
+      buildPlace(id: 'food', category: ' 餐饮服务 ; 咖啡厅 '),
+    ]);
+
+    expect(result.map((place) => place.id), ['food']);
+  });
+
+  test('keeps food places without a rating when coordinates are valid', () {
+    final result = selectMapMarkers(
+      places: [
+        buildPlace(
+          id: 'unrated',
+          rating: null,
+          latitude: 38.914,
+          longitude: 121.615,
+        ),
+        buildPlace(
+          id: 'invalid-rating',
+          rating: double.nan,
+          latitude: 38.914,
+          longitude: 121.616,
+        ),
+      ],
+      context: context(width: 1200, height: 1200),
+    );
+
+    expect(result.places.map((place) => place.id), ['unrated', 'invalid-rating']);
+  });
+
+  test('keeps only food places with valid coordinates', () {
     final result = selectMapMarkers(
       places: [
         buildPlace(id: 'food', latitude: 38.914, longitude: 121.615),
@@ -50,13 +112,13 @@ void main() {
         buildPlace(
           id: 'missing-rating',
           latitude: 38.914,
-          longitude: 121.615,
+          longitude: 121.616,
           rating: null,
         ),
         buildPlace(
           id: 'bad-rating',
           latitude: 38.914,
-          longitude: 121.615,
+          longitude: 121.617,
           rating: double.nan,
         ),
         Place(
@@ -70,7 +132,11 @@ void main() {
       context: context(),
     );
 
-    expect(result.places.map((place) => place.id), ['food']);
+    expect(result.places.map((place) => place.id), [
+      'food',
+      'missing-rating',
+      'bad-rating',
+    ]);
   });
 
   test('sorts by rating, then distance and id deterministically', () {
@@ -107,6 +173,25 @@ void main() {
 
     expect(result.places.map((place) => place.id), ['duplicate']);
     expect(result.places.single.rating, 5);
+  });
+
+  test('uses a smaller safe fallback spacing for dense places', () {
+    final result = selectMapMarkers(
+      places: [
+        buildPlace(id: 'a', rating: 5, latitude: 38.914, longitude: 121.615),
+        buildPlace(id: 'b', rating: 4, latitude: 38.914, longitude: 121.6155),
+        buildPlace(id: 'c', rating: 3, latitude: 38.914, longitude: 121.616),
+      ],
+      context: context(width: 1200, height: 1200),
+      config: const MapMarkerSelectionConfig(
+        markerFootprintPx: 20,
+        markerGapPx: 4,
+        minMarkers: 3,
+        maxMarkers: 3,
+      ),
+    );
+
+    expect(result.places.map((place) => place.id), ['a', 'c']);
   });
 
   test('uses a dynamic target and never exceeds max markers', () {

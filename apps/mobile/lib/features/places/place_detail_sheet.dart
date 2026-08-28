@@ -47,6 +47,7 @@ class PlaceDetailSheet extends StatelessWidget {
     final scheme = theme.colorScheme;
     final category = place.primaryCategory;
     final addToTrip = onAddToTrip;
+    final rating = place.hasValidRating ? place.rating : null;
 
     return Material(
       color: scheme.surface,
@@ -83,6 +84,14 @@ class PlaceDetailSheet extends StatelessWidget {
               if (category != null) ...[
                 const SizedBox(height: AppTokens.spaceXs),
                 _CategoryChip(label: category),
+              ],
+              if (rating case final value?) ...[
+                const SizedBox(height: AppTokens.spaceMd),
+                _DetailRow(
+                  icon: Icons.star,
+                  text: '高德评分 ${value.toStringAsFixed(1)} / 5',
+                  color: scheme.tertiary,
+                ),
               ],
               if (place.address != null) ...[
                 const SizedBox(height: AppTokens.spaceMd),
@@ -200,16 +209,18 @@ class _DetailRow extends StatelessWidget {
     required this.icon,
     required this.text,
     this.isSubtle = false,
+    this.color,
   });
 
   final IconData icon;
   final String text;
   final bool isSubtle;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final color = theme.colorScheme.onSurfaceVariant;
+    final color = this.color ?? theme.colorScheme.onSurfaceVariant;
     final style = isSubtle
         ? theme.textTheme.bodySmall
         : theme.textTheme.bodyMedium;

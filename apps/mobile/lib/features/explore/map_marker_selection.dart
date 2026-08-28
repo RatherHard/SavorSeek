@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:savorseek/features/places/place_models.dart';
 
-const _selectionVersion = 'marker-selection-v1';
+const _selectionVersion = 'marker-selection-v2';
 const _earthMetersPerDegreeLatitude = 110540.0;
 const _earthMetersPerDegreeLongitude = 111320.0;
 
@@ -92,6 +92,17 @@ bool isFoodCategory(String? category) {
   return levels.any(_foodCategories.contains);
 }
 
+/// Returns the food-only projection used by the Explore results drawer.
+///
+/// This intentionally checks only the category. Coordinates and ratings are
+/// marker-specific requirements; a food place without either is still useful
+/// in the results list and can be opened for details.
+List<Place> filterFoodPlaces(Iterable<Place> places) {
+  return List.unmodifiable(
+    places.where((place) => isFoodCategory(place.category)),
+  );
+}
+
 bool isValidAmapRating(double? rating) =>
     rating != null && rating.isFinite && rating >= 0 && rating <= 5;
 
@@ -140,6 +151,7 @@ MapMarkerSelectionResult selectMapMarkers({
   final cellSize = config.markerFootprintPx + config.markerGapPx;
   final selected = <Place>[];
   final occupied = <String, Place>{};
+  final deferred = <Place>[];
 
   for (final place in visible) {
     if (selected.length >= target) break;
@@ -148,10 +160,32 @@ MapMarkerSelectionResult selectMapMarkers({
         '${(point.$1 / cellSize).floor()}:${(point.$2 / cellSize).floor()}';
     if (occupied.containsKey(cell) ||
         _tooClose(point, selected, context, config)) {
+      deferred.add(place);
       continue;
     }
     occupied[cell] = place;
     selected.add(place);
+  }
+
+  // 目标数量是上限；若第一轮的可读间距不足，不直接堆叠标记。
+  // 第二轮只放宽到较小的安全间距，避免密集区域永远只剩一个，同时避免
+  // 相同坐标的标记完全重叠而互相遮挡、无法点击。
+  if (selected.length < target) {
+    final fallbackSpacing = math.max(8.0, cellSize * 0.2);
+    for (final place in deferred) {
+      if (selected.length >= target) break;
+      final point = _project(place, context);
+      if (_tooClose(
+        point,
+        selected,
+        context,
+        config,
+        spacingPx: fallbackSpacing,
+      )) {
+        continue;
+      }
+      selected.add(place);
+    }
   }
 
   return MapMarkerSelectionResult(
@@ -173,11 +207,10 @@ bool _isEligible(Place place) =>
     place.latitude! >= -90 &&
     place.latitude! <= 90 &&
     place.longitude! >= -180 &&
-    place.longitude! <= 180 &&
-    isValidAmapRating(place.rating);
+    place.longitude! <= 180;
 
 int _compare(Place a, Place b, MapMarkerSelectionContext context) {
-  final rating = b.rating!.compareTo(a.rating!);
+  final rating = _ratingPriority(b).compareTo(_ratingPriority(a));
   if (rating != 0) return rating;
   final distance = _distanceSquared(
     a,
@@ -191,6 +224,11 @@ int _compare(Place a, Place b, MapMarkerSelectionContext context) {
   final latitude = a.latitude!.compareTo(b.latitude!);
   if (latitude != 0) return latitude;
   return a.name.trim().compareTo(b.name.trim());
+}
+
+double _ratingPriority(Place place) {
+  final rating = place.rating;
+  return isValidAmapRating(rating) ? rating! : -1;
 }
 
 double _distanceSquared(Place place, MapMarkerSelectionContext context) {
@@ -228,9 +266,10 @@ bool _tooClose(
   (double, double) point,
   List<Place> selected,
   MapMarkerSelectionContext context,
-  MapMarkerSelectionConfig config,
-) {
-  final spacing = config.markerFootprintPx + config.markerGapPx;
+  MapMarkerSelectionConfig config, {
+  double? spacingPx,
+}) {
+  final spacing = spacingPx ?? config.markerFootprintPx + config.markerGapPx;
   final spacingSquared = spacing * spacing;
   for (final place in selected) {
     final other = _project(place, context);
