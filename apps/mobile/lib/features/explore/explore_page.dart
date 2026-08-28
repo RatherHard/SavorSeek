@@ -435,7 +435,7 @@ class _ExplorePageState extends State<ExplorePage> {
         ? currentState.queryKey ?? currentState.keywords
         : 'search';
     final selection = selectMapMarkers(
-      places: _search?.visiblePlaces ?? const <Place>[],
+      places: _search?.mapPlaces ?? const <Place>[],
       context: MapMarkerSelectionContext(
         centerLatitude: query.center.latitude,
         centerLongitude: query.center.longitude,

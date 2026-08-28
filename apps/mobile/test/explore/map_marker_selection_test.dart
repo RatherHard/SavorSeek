@@ -178,6 +178,82 @@ void main() {
     expect(result.places.single.rating, 5);
   });
 
+  test(
+    'distributes markers across visible regions before filling by rating',
+    () {
+      final clustered = [
+        buildPlace(
+          id: 'cluster-1',
+          rating: 5,
+          latitude: 38.914,
+          longitude: 121.615,
+        ),
+        buildPlace(
+          id: 'cluster-2',
+          rating: 4.9,
+          latitude: 38.915,
+          longitude: 121.615,
+        ),
+        buildPlace(
+          id: 'cluster-3',
+          rating: 4.8,
+          latitude: 38.916,
+          longitude: 121.615,
+        ),
+        buildPlace(
+          id: 'cluster-4',
+          rating: 4.7,
+          latitude: 38.917,
+          longitude: 121.615,
+        ),
+      ];
+      final outer = [
+        buildPlace(
+          id: 'north-west',
+          rating: 3,
+          latitude: 38.926,
+          longitude: 121.600,
+        ),
+        buildPlace(
+          id: 'north-east',
+          rating: 3,
+          latitude: 38.926,
+          longitude: 121.630,
+        ),
+        buildPlace(
+          id: 'south-west',
+          rating: 3,
+          latitude: 38.902,
+          longitude: 121.600,
+        ),
+        buildPlace(
+          id: 'south-east',
+          rating: 3,
+          latitude: 38.902,
+          longitude: 121.630,
+        ),
+      ];
+
+      final result = selectMapMarkers(
+        places: [...clustered, ...outer],
+        context: context(),
+        config: const MapMarkerSelectionConfig(
+          markerFootprintPx: 20,
+          markerGapPx: 4,
+          minMarkers: 4,
+          maxMarkers: 4,
+        ),
+      );
+
+      final selectedIds = result.places.map((place) => place.id).toSet();
+      expect(
+        selectedIds.intersection(outer.map((place) => place.id).toSet()).length,
+        greaterThanOrEqualTo(3),
+      );
+      expect(selectedIds, isNot(contains('cluster-4')));
+    },
+  );
+
   test('uses a smaller safe fallback spacing for dense places', () {
     final result = selectMapMarkers(
       places: [

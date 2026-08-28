@@ -124,6 +124,10 @@ class PlaceSearchController extends ChangeNotifier {
     return _viewportResult?.places ?? const <Place>[];
   }
 
+  /// 当前地图应使用的候选。视野检索成功后优先使用最新视野批次，避免关键词结果
+  /// 在地图移动后继续作为过期 marker 来源；尚未有视野结果时回退到可见结果。
+  List<Place> get mapPlaces => _viewportResult?.places ?? visiblePlaces;
+
   PlaceSearchState get state => _state;
 
   /// 当前选中的地点，决定详情面板是否展开。
@@ -153,6 +157,11 @@ class PlaceSearchController extends ChangeNotifier {
     final requestId = ++_requestId;
     final previous = _viewportResult;
     final trimmed = keywords?.trim() ?? '';
+    _lastViewportKey = queryKey;
+    _lastViewportKeywords = trimmed;
+    _lastViewportLatitude = latitude;
+    _lastViewportLongitude = longitude;
+    _lastViewportRadius = radiusMeters;
     _setState(PlaceSearchLoading(trimmed, source: PlaceSearchSource.viewport));
 
     try {
@@ -228,6 +237,8 @@ class PlaceSearchController extends ChangeNotifier {
     // 新检索作废旧的选中项：详情面板里的地点可能已不在新结果中。
     _selected = null;
     _keywordResult = null;
+    _viewportResult = null;
+    _lastViewportKey = null;
     _setState(PlaceSearchLoading(trimmed));
 
     try {

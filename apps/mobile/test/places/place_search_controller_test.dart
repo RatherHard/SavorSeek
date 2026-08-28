@@ -105,6 +105,30 @@ void main() {
     expect((state as PlaceSearchLoaded).source, PlaceSearchSource.viewport);
   });
 
+  test('视野结果优先作为地图候选但不替换关键词展示结果', () async {
+    final keywordPlace = buildPlace(id: 'keyword');
+    final viewportPlace = buildPlace(id: 'viewport', name: '视野地点');
+    repository.result = PlaceSearchResult(
+      places: [keywordPlace],
+      fromCache: false,
+    );
+    await controller.searchByKeywords('烧烤');
+
+    repository.result = PlaceSearchResult(
+      places: [viewportPlace],
+      fromCache: false,
+    );
+    await controller.searchAround(
+      latitude: 38.914,
+      longitude: 121.615,
+      radiusMeters: 3000,
+      queryKey: 'viewport-1',
+    );
+
+    expect(controller.visiblePlaces.single.id, 'keyword');
+    expect(controller.mapPlaces.single.id, 'viewport');
+  });
+
   test('相同视野 query key 不重复请求', () async {
     repository.result = PlaceSearchResult(
       places: [buildPlace()],
