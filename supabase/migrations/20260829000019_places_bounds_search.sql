@@ -15,6 +15,7 @@ set search_path = public, pg_temp
 as $$
   select jsonb_build_object(
     'id', p.id,
+    'provider_place_id', p.provider_place_id,
     'name', p.name,
     'category', p.category,
     'address', p.address,
