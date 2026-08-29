@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:savorseek/app/util/uuid.dart';
 import 'package:savorseek/features/agent/agent_models.dart';
+import 'package:savorseek/features/agent/agent_event_reducer.dart';
 import 'package:savorseek/features/agent/agent_repository.dart';
 
 class AgentController extends ChangeNotifier {
@@ -15,6 +16,7 @@ class AgentController extends ChangeNotifier {
   final SupabaseClient _client;
   AgentWorkspaceSnapshot _snapshot = const AgentWorkspaceSnapshot();
   RealtimeChannel? _channel;
+  AgentEventReducer _events = AgentEventReducer();
   String? _sessionId;
   bool _isSubmitting = false;
   String? _error;
@@ -118,6 +120,7 @@ class AgentController extends ChangeNotifier {
       await _subscribe(sessionId);
     }
     _snapshot = snapshot;
+    _events.replaceFromSnapshot(snapshot);
     _sessionId = sessionId;
     notifyListeners();
   }
@@ -132,7 +135,10 @@ class AgentController extends ChangeNotifier {
           table: 'squad_events',
           callback: (payload) {
             if (payload.newRecord['session_id'] == sessionId) {
-              unawaited(refresh());
+              final event = AgentEvent.fromJson(payload.newRecord);
+              if (_events.accept(event) || _events.needsSnapshot) {
+                unawaited(refresh());
+              }
             }
           },
         )
