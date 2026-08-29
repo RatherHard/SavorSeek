@@ -153,12 +153,12 @@ begin
     raise exception using errcode = '22023', message = 'constraints must be an object';
   end if;
 
-  request_hash := digest(
+  request_hash := extensions.digest(
     jsonb_build_object(
       'title', p_title, 'goal', p_goal, 'raw_text', p_raw_text,
       'task_type', p_task_type, 'context', p_context, 'constraints', p_constraints,
       'memory_policy', p_memory_policy, 'locale', p_locale, 'client_version', p_client_version
-    )::text, 'sha256'
+    )::text, 'sha256'::text
   );
   prior_command_id := public.agent_idempotency_begin(actor, 'submit_captain_command', p_client_request_id, request_hash);
   if prior_command_id is not null then
