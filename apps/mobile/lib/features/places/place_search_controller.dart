@@ -198,6 +198,7 @@ class PlaceSearchController extends ChangeNotifier {
     final requestId = ++_requestId;
     final previous = _viewportResult;
     final trimmed = keywords?.trim() ?? '';
+    _lastStructuredQuery = null;
     _lastViewportKeywords = trimmed;
     _lastViewportLatitude = latitude;
     _lastViewportLongitude = longitude;
@@ -379,6 +380,8 @@ class PlaceSearchController extends ChangeNotifier {
     if (_isLoadingMore || _lastStructuredQuery == null) return;
     final current = _state;
     if (current is! PlaceSearchLoaded ||
+        current.source != PlaceSearchSource.keyword ||
+        current.query == null ||
         !current.result.hasMore ||
         current.result.nextCursor == null) {
       return;

@@ -42,7 +42,7 @@ class PlaceResultsDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (places.isEmpty) return const SizedBox.shrink();
+    if (places.isEmpty && !isPartial) return const SizedBox.shrink();
     return DraggableScrollableSheet(
       initialChildSize: 0.12,
       minChildSize: 0.12,
