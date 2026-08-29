@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:savorseek/features/places/place_models.dart';
 import 'package:savorseek/features/places/place_repository.dart';
 import 'package:savorseek/features/places/place_search_controller.dart';
+import 'package:savorseek/features/places/place_search_query.dart';
 
 /// 手写 fake 而非 mock：检索仓库只有两个方法，且这里需要控制「响应何时到达」
 /// 来验证乱序响应，用 Completer 比配置 mock 的返回顺序清晰得多。
@@ -23,6 +24,14 @@ class FakePlaceRepository implements PlaceRepository {
 
   /// 非空时，检索会挂起直到测试显式完成它。
   Completer<void>? gate;
+
+  @override
+  Future<PlaceSearchResult> search(PlaceSearchQuery query) async {
+    if (gate != null) await gate!.future;
+    final failure = error;
+    if (failure != null) throw failure;
+    return result;
+  }
 
   @override
   Future<PlaceSearchResult> searchByKeywords({

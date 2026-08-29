@@ -27,6 +27,7 @@ import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 
 import {
   type AmapQuery,
+  type NormalizedPlace,
   AMAP_EXTENSIONS,
   PAGE_SIZE,
   PLACE_RESPONSE_CONTRACT_VERSION,
@@ -47,6 +48,10 @@ const CACHE_TTL_SECONDS = 86_400;
 const MAX_RADIUS_METERS = 50_000;
 
 const MAX_PAGE = 10;
+const MAX_BOUNDS_SPAN_DEGREES = 20;
+const MAX_RESULT_LIMIT = 100;
+
+type SearchQuery = AmapQuery | BoundsSearchQuery;
 
 Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') {
@@ -146,7 +151,8 @@ async function readJsonBody(req: Request): Promise<Record<string, unknown>> {
   return payload as Record<string, unknown>;
 }
 
-function parseQuery(body: Record<string, unknown>): AmapQuery {
+function parseQuery(body: Record<string, unknown>): SearchQuery {
+  if (body.kind === 'bounds') return parseBoundsQuery(body);
   const page = parsePage(body.page);
 
   if (body.kind === 'text') {
@@ -196,6 +202,138 @@ function parsePage(value: unknown): number {
   return page;
 }
 
+interface BoundsSearchQuery {
+  kind: 'bounds';
+  bounds: { south: number; west: number; north: number; east: number };
+  keywords?: string;
+  city?: string;
+  filters: {
+    cuisine_tags: string[];
+    min_price_level?: number;
+    max_price_level?: number;
+    max_distance_meters?: number;
+    open_now?: boolean;
+    min_rating?: number;
+  };
+  limit: number;
+  cursor?: string;
+}
+
+function parseBoundsQuery(body: Record<string, unknown>): BoundsSearchQuery {
+  const rawBounds = body.bounds;
+  if (typeof rawBounds !== 'object' || rawBounds === null || Array.isArray(rawBounds)) {
+    throw new PlacesSearchError('invalid_request', 'bounds 必须是 JSON 对象。');
+  }
+  const bounds = rawBounds as Record<string, unknown>;
+  const south = parseCoordinate(bounds.south, 90, '南纬');
+  const north = parseCoordinate(bounds.north, 90, '北纬');
+  const west = parseCoordinate(bounds.west, 180, '西经');
+  const east = parseCoordinate(bounds.east, 180, '东经');
+  if (south > north) {
+    throw new PlacesSearchError('invalid_request', 'bounds 的南北边界无效。');
+  }
+  if (north - south > MAX_BOUNDS_SPAN_DEGREES) {
+    throw new PlacesSearchError('invalid_request', '地图范围过大，请放大地图后重试。');
+  }
+  const rawFilters = body.filters;
+  const filters = parseFilters(rawFilters);
+  const limit = parseLimit(body.limit);
+  const keywords = readTrimmed(body.keywords);
+  if (keywords && keywords.length > 80) {
+    throw new PlacesSearchError('invalid_request', '关键词过长，请精简后重试。');
+  }
+  return {
+    kind: 'bounds',
+    bounds: { south, west, north, east },
+    keywords,
+    city: readTrimmed(body.city),
+    filters,
+    limit,
+    cursor: readTrimmed(body.cursor),
+  };
+}
+
+function parseFilters(value: unknown): BoundsSearchQuery['filters'] {
+  if (value === undefined || value === null) {
+    return { cuisine_tags: [] };
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new PlacesSearchError('invalid_request', 'filters 必须是 JSON 对象。');
+  }
+  const row = value as Record<string, unknown>;
+  const cuisineValue = row.cuisine_tags;
+  const cuisineTags = cuisineValue === undefined
+    ? []
+    : Array.isArray(cuisineValue) && cuisineValue.every((item) => typeof item === 'string')
+    ? [...new Set(cuisineValue.map((item) => item.trim()).filter(Boolean))].sort()
+    : (() => { throw new PlacesSearchError('invalid_request', '菜系筛选格式无效。'); })();
+  if (cuisineTags.length > 20 || cuisineTags.some((tag) => tag.length > 40)) {
+    throw new PlacesSearchError('invalid_request', '菜系筛选条件过多或过长。');
+  }
+  const minPrice = parseOptionalInteger(row.min_price_level, 1, 4, '最低价格');
+  const maxPrice = parseOptionalInteger(row.max_price_level, 1, 4, '最高价格');
+  if (minPrice !== undefined && maxPrice !== undefined && minPrice > maxPrice) {
+    throw new PlacesSearchError('invalid_request', '价格范围无效。');
+  }
+  const maxDistance = parseOptionalInteger(
+    row.max_distance_meters,
+    1,
+    MAX_RADIUS_METERS,
+    '最大距离',
+  );
+  const minRating = parseOptionalNumber(row.min_rating, 0, 5, '最低评分');
+  const openNow = row.open_now === undefined || row.open_now === null
+    ? undefined
+    : typeof row.open_now === 'boolean'
+    ? row.open_now
+    : (() => { throw new PlacesSearchError('invalid_request', '营业状态筛选格式无效。'); })();
+  return {
+    cuisine_tags: cuisineTags,
+    ...(minPrice === undefined ? {} : { min_price_level: minPrice }),
+    ...(maxPrice === undefined ? {} : { max_price_level: maxPrice }),
+    ...(maxDistance === undefined ? {} : { max_distance_meters: maxDistance }),
+    ...(openNow === undefined ? {} : { open_now: openNow }),
+    ...(minRating === undefined ? {} : { min_rating: minRating }),
+  };
+}
+
+function parseLimit(value: unknown): number {
+  if (value === undefined || value === null) return 50;
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_RESULT_LIMIT) {
+    throw new PlacesSearchError('invalid_request', `limit 必须是 1 到 ${MAX_RESULT_LIMIT} 之间的整数。`);
+  }
+  return limit;
+}
+
+function parseOptionalInteger(
+  value: unknown,
+  min: number,
+  max: number,
+  label: string,
+): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw new PlacesSearchError('invalid_request', `${label}必须在 ${min} 到 ${max} 之间。`);
+  }
+  return parsed;
+}
+
+function parseOptionalNumber(
+  value: unknown,
+  min: number,
+  max: number,
+  label: string,
+): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    throw new PlacesSearchError('invalid_request', `${label}必须在 ${min} 到 ${max} 之间。`);
+  }
+  return parsed;
+}
+
 function parseCoordinate(value: unknown, limit: number, label: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || Math.abs(parsed) > limit) {
@@ -229,13 +367,18 @@ interface SearchResult {
   places: unknown[];
   fetched_at: string | null;
   from_cache: boolean;
+  partial?: boolean;
+  failed_tiles?: string[];
 }
 
 /** 先查缓存，未命中再回源高德并落库。 */
 async function resolveSearch(
   serviceClient: SupabaseClient,
-  query: AmapQuery,
+  query: SearchQuery,
 ): Promise<SearchResult> {
+  if (query.kind === 'bounds') {
+    return resolveBoundsSearch(serviceClient, query);
+  }
   // 缓存键由归一化参数构成，与请求体无关：客户端多传的字段不该造成缓存穿透。
   const queryParams = toQueryParams(query);
 
@@ -259,6 +402,40 @@ async function resolveSearch(
     fetched_at: null,
     from_cache: false,
   }) as SearchResult;
+}
+
+async function resolveBoundsSearch(
+  serviceClient: SupabaseClient,
+  query: BoundsSearchQuery,
+): Promise<SearchResult> {
+  const params = toBoundsQueryParams(query);
+  const cached = await rpc(serviceClient, 'lookup_place_search', {
+    p_search_kind: 'bounds',
+    p_query_params: params,
+    p_ttl_seconds: CACHE_TTL_SECONDS,
+  });
+  if (cached) return cached as SearchResult;
+  return {
+    places: [],
+    fetched_at: null,
+    from_cache: false,
+    partial: true,
+    failed_tiles: ['bounds-search-not-enabled'],
+  } as SearchResult;
+}
+
+function toBoundsQueryParams(
+  query: BoundsSearchQuery,
+): Record<string, unknown> {
+  return {
+    bounds: query.bounds,
+    city: query.city ?? null,
+    keywords: query.keywords ?? null,
+    filters: query.filters,
+    limit: query.limit,
+    cursor: query.cursor ?? null,
+    contract_version: 'places-filter-v1',
+  };
 }
 
 /** 归一化查询参数。键序固定，缺省项显式补齐，避免等价查询算出不同哈希。 */

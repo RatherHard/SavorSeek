@@ -8,6 +8,31 @@ class MapViewportCenter {
   final double longitude;
 }
 
+/// A Web Mercator viewport boundary. `west > east` means the boundary crosses
+/// the antimeridian.
+class MapViewportBounds {
+  const MapViewportBounds({
+    required this.south,
+    required this.west,
+    required this.north,
+    required this.east,
+  });
+
+  final double south;
+  final double west;
+  final double north;
+  final double east;
+
+  bool get crossesAntimeridian => west > east;
+
+  bool containsLongitude(double longitude) => crossesAntimeridian
+      ? longitude >= west || longitude <= east
+      : longitude >= west && longitude <= east;
+
+  bool contains({required double latitude, required double longitude}) =>
+      latitude >= south && latitude <= north && containsLongitude(longitude);
+}
+
 /// A normalized, cache-friendly query for places around the visible map area.
 class MapViewportQuery {
   const MapViewportQuery({
@@ -17,6 +42,7 @@ class MapViewportQuery {
     required this.metersPerPixel,
     required this.width,
     required this.height,
+    required this.bounds,
     required this.key,
   });
 
@@ -26,6 +52,7 @@ class MapViewportQuery {
   final double metersPerPixel;
   final double width;
   final double height;
+  final MapViewportBounds bounds;
   final String key;
 }
 
@@ -65,6 +92,14 @@ MapViewportQuery? buildMapViewportQuery({
   final normalizedRadius = math.max(1, _roundTo(radiusMeters, 100));
   final normalizedWidth = _round(width, 1);
   final normalizedHeight = _round(height, 1);
+  final bounds = _buildApproximateBounds(
+    latitude: latitude,
+    longitude: longitude,
+    zoom: zoom,
+    width: width,
+    height: height,
+  );
+  if (bounds == null) return null;
   final key =
       '$normalizedLatitude:$normalizedLongitude:'
       '$normalizedZoom:$normalizedRadius:$normalizedWidth:$normalizedHeight';
@@ -79,11 +114,49 @@ MapViewportQuery? buildMapViewportQuery({
     metersPerPixel: metersPerPixel,
     width: width,
     height: height,
+    bounds: bounds,
     key: key,
   );
 }
 
+MapViewportBounds? _buildApproximateBounds({
+  required double latitude,
+  required double longitude,
+  required double zoom,
+  required double width,
+  required double height,
+}) {
+  final worldSize = 256 * math.pow(2, zoom).toDouble();
+  final centerX = (longitude + 180) / 360 * worldSize;
+  final sine = math.sin(latitude * math.pi / 180).clamp(-0.9999, 0.9999);
+  final centerY =
+      (0.5 - math.log((1 + sine) / (1 - sine)) / (4 * math.pi)) * worldSize;
+  final west = _worldXToLongitude(centerX - width / 2, worldSize);
+  final east = _worldXToLongitude(centerX + width / 2, worldSize);
+  final south = _worldYToLatitude(centerY + height / 2, worldSize);
+  final north = _worldYToLatitude(centerY - height / 2, worldSize);
+  if (![west, east, south, north].every(_isFinite)) return null;
+  return MapViewportBounds(
+    south: south.clamp(-85.0511, 85.0511).toDouble(),
+    west: west,
+    north: north.clamp(-85.0511, 85.0511).toDouble(),
+    east: east,
+  );
+}
+
 bool _isFinite(double value) => value.isFinite;
+
+double _worldXToLongitude(double x, double worldSize) {
+  final wrapped = ((x % worldSize) + worldSize) % worldSize;
+  return wrapped / worldSize * 360 - 180;
+}
+
+double _worldYToLatitude(double y, double worldSize) {
+  final normalized = (y / worldSize).clamp(0.0, 1.0);
+  final value = math.pi * (1 - 2 * normalized);
+  final sinh = (math.exp(value) - math.exp(-value)) / 2;
+  return 180 / math.pi * math.atan(sinh);
+}
 
 double _round(double value, int decimals) {
   final factor = math.pow(10, decimals).toDouble();

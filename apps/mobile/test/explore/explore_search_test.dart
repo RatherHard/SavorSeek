@@ -4,6 +4,7 @@ import 'package:savorseek/features/explore/agent_command_bar.dart';
 import 'package:savorseek/features/explore/explore_page.dart';
 import 'package:savorseek/features/places/place_models.dart';
 import 'package:savorseek/features/places/place_repository.dart';
+import 'package:savorseek/features/places/place_search_query.dart';
 
 /// 可编程的检索仓库。
 class StubPlaceRepository implements PlaceRepository {
@@ -19,6 +20,13 @@ class StubPlaceRepository implements PlaceRepository {
     String? city,
   }) async {
     calls.add(keywords);
+    final failure = error;
+    if (failure != null) throw failure;
+    return result ?? const PlaceSearchResult(places: [], fromCache: false);
+  }
+
+  @override
+  Future<PlaceSearchResult> search(PlaceSearchQuery query) async {
     final failure = error;
     if (failure != null) throw failure;
     return result ?? const PlaceSearchResult(places: [], fromCache: false);

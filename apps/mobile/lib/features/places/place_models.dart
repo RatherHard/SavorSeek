@@ -16,6 +16,9 @@ class Place {
     this.latitude,
     this.longitude,
     this.rating,
+    this.cuisineTags = const [],
+    this.priceLevel,
+    this.businessStatus,
   }) : assert((latitude == null) == (longitude == null), '经纬度必须同时提供或同时省略');
 
   final String id;
@@ -29,6 +32,9 @@ class Place {
 
   /// 高德 POI 商业扩展中的评分；缺失或异常时为 null。
   final double? rating;
+  final List<String> cuisineTags;
+  final int? priceLevel;
+  final PlaceBusinessStatus? businessStatus;
 
   /// 该地点信息的抓取时间，用于向用户说明「信息更新于 X」。
   ///
@@ -62,8 +68,35 @@ class Place {
       latitude: _readDouble(json['latitude']),
       longitude: _readDouble(json['longitude']),
       rating: _readDouble(json['rating']),
+      cuisineTags: _readTags(json['cuisine_tags']),
+      priceLevel: _readPriceLevel(json['price_level']),
+      businessStatus: _readBusinessStatus(json['business_status']),
       fetchedAt: DateTime.parse(json['fetched_at'] as String).toLocal(),
     );
+  }
+
+  static List<String> _readTags(Object? value) {
+    if (value is! List) return const [];
+    return List.unmodifiable(
+      value
+          .whereType<String>()
+          .map((tag) => tag.trim())
+          .where((tag) => tag.isNotEmpty),
+    );
+  }
+
+  static int? _readPriceLevel(Object? value) {
+    final level = value is num ? value.toInt() : int.tryParse('$value');
+    return level != null && level >= 1 && level <= 4 ? level : null;
+  }
+
+  static PlaceBusinessStatus? _readBusinessStatus(Object? value) {
+    return switch (value) {
+      'open' => PlaceBusinessStatus.open,
+      'closed' => PlaceBusinessStatus.closed,
+      'unknown' => PlaceBusinessStatus.unknown,
+      _ => null,
+    };
   }
 
   static double? _readDouble(Object? value) {
@@ -74,13 +107,28 @@ class Place {
   }
 }
 
-/// 一次检索的结果。
+/// Provider business status. Null means the provider did not supply a reliable value.
+enum PlaceBusinessStatus { open, closed, unknown }
+
+/// A place returned by a search.
+@immutable
+class PlaceSearchHit {
+  const PlaceSearchHit({required this.place, this.distanceMeters});
+
+  final Place place;
+  final int? distanceMeters;
+}
+
 @immutable
 class PlaceSearchResult {
   const PlaceSearchResult({
     required this.places,
     required this.fromCache,
     this.fetchedAt,
+    this.nextCursor,
+    this.hasMore = false,
+    this.isPartial = false,
+    this.failedTiles = const [],
   });
 
   final List<Place> places;
@@ -88,6 +136,10 @@ class PlaceSearchResult {
   /// 结果是否来自服务端缓存。用于在 UI 上说明数据时效来源。
   final bool fromCache;
   final DateTime? fetchedAt;
+  final String? nextCursor;
+  final bool hasMore;
+  final bool isPartial;
+  final List<String> failedTiles;
 
   bool get isEmpty => places.isEmpty;
 }
