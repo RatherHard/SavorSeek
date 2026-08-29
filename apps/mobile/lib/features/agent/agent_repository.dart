@@ -17,7 +17,7 @@ abstract interface class AgentRepository {
   });
 
   Future<AgentWorkspaceSnapshot> loadSession(String sessionId);
-  Future<List<AgentEvent>> listEvents(String sessionId, int afterSequence);
+  Future<AgentEventBatch> listEvents(String sessionId, int afterSequence);
   Future<void> cancel(String sessionId);
   Future<void> retryTask(String taskId);
 
@@ -62,7 +62,7 @@ class UnavailableAgentRepository implements AgentRepository {
   Future<AgentWorkspaceSnapshot> loadSession(String sessionId) => _fail();
 
   @override
-  Future<List<AgentEvent>> listEvents(String sessionId, int afterSequence) =>
+  Future<AgentEventBatch> listEvents(String sessionId, int afterSequence) =>
       _fail();
 
   @override
@@ -155,7 +155,7 @@ class SupabaseAgentRepository implements AgentRepository {
   }
 
   @override
-  Future<List<AgentEvent>> listEvents(
+  Future<AgentEventBatch> listEvents(
     String sessionId,
     int afterSequence,
   ) async {
@@ -165,14 +165,7 @@ class SupabaseAgentRepository implements AgentRepository {
       'sessionId': sessionId,
       'afterSequence': afterSequence,
     });
-    final events = response['events'];
-    if (events is! List) {
-      throw const AgentRepositoryException('事件列表格式异常。');
-    }
-    return events
-        .whereType<Map>()
-        .map((item) => AgentEvent.fromJson(Map<String, dynamic>.from(item)))
-        .toList(growable: false);
+    return AgentEventBatch.fromJson(response);
   }
 
   @override

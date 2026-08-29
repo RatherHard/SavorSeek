@@ -92,6 +92,31 @@ class AgentEvent {
 }
 
 @immutable
+class AgentEventBatch {
+  const AgentEventBatch({this.events = const [], this.nextSequence = 0})
+    : assert(nextSequence >= 0);
+
+  final List<AgentEvent> events;
+  final int nextSequence;
+
+  factory AgentEventBatch.fromJson(Map<String, dynamic> json) {
+    final rawEvents = json['events'];
+    final rawSequence = json['nextSequence'] ?? json['next_sequence'];
+    final parsedSequence = _int(rawSequence) ?? 0;
+    return AgentEventBatch(
+      events: rawEvents is List
+          ? List.unmodifiable(
+              rawEvents.whereType<Map>().map(
+                (item) => AgentEvent.fromJson(Map<String, dynamic>.from(item)),
+              ),
+            )
+          : const [],
+      nextSequence: parsedSequence < 0 ? 0 : parsedSequence,
+    );
+  }
+}
+
+@immutable
 class AgentWorkspaceSnapshot {
   const AgentWorkspaceSnapshot({
     this.session,

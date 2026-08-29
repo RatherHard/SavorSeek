@@ -4,9 +4,14 @@ import 'package:savorseek/features/agent/agent_controller.dart';
 import 'package:savorseek/features/agent/agent_models.dart';
 
 class AgentWorkspacePanel extends StatelessWidget {
-  const AgentWorkspacePanel({super.key, required this.controller});
+  const AgentWorkspacePanel({
+    super.key,
+    required this.controller,
+    this.tripRevision,
+  });
 
   final AgentController controller;
+  final int? tripRevision;
 
   @override
   Widget build(BuildContext context) {
@@ -24,7 +29,11 @@ class AgentWorkspacePanel extends StatelessWidget {
             padding: const EdgeInsets.all(12),
             child: controller.error != null
                 ? _ErrorView(controller: controller)
-                : _SessionView(controller: controller, snapshot: snapshot),
+                : _SessionView(
+                    controller: controller,
+                    snapshot: snapshot,
+                    tripRevision: tripRevision,
+                  ),
           ),
         ),
       ),
@@ -52,9 +61,14 @@ class _ErrorView extends StatelessWidget {
 }
 
 class _SessionView extends StatelessWidget {
-  const _SessionView({required this.controller, required this.snapshot});
+  const _SessionView({
+    required this.controller,
+    required this.snapshot,
+    this.tripRevision,
+  });
   final AgentController controller;
   final AgentWorkspaceSnapshot snapshot;
+  final int? tripRevision;
 
   @override
   Widget build(BuildContext context) {
@@ -94,7 +108,11 @@ class _SessionView extends StatelessWidget {
               for (final decision in snapshot.decisions.where(
                 (item) => item['status'] == 'pending',
               ))
-                _DecisionTile(controller: controller, decision: decision),
+                _DecisionTile(
+                  controller: controller,
+                  decision: decision,
+                  fallbackRevision: tripRevision,
+                ),
             ],
           ),
         ),
@@ -163,16 +181,24 @@ class _RecommendationTile extends StatelessWidget {
 }
 
 class _DecisionTile extends StatelessWidget {
-  const _DecisionTile({required this.controller, required this.decision});
+  const _DecisionTile({
+    required this.controller,
+    required this.decision,
+    this.fallbackRevision,
+  });
   final AgentController controller;
   final Map<String, dynamic> decision;
+  final int? fallbackRevision;
 
   @override
   Widget build(BuildContext context) {
     final options = decision['options'];
     if (options is! List) return const SizedBox.shrink();
-    final revision = decision['expectedRevision'];
-    final expectedRevision = revision is num ? revision.toInt() : null;
+    final revision =
+        decision['expectedRevision'] ?? decision['expected_revision'];
+    final expectedRevision = revision is num
+        ? revision.toInt()
+        : fallbackRevision;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -184,13 +210,20 @@ class _DecisionTile extends StatelessWidget {
           if (option is Map && option['id'] is String)
             Align(
               alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: () => controller.resolveDecision(
-                  decision,
-                  option['id'] as String,
-                  expectedRevision: expectedRevision,
-                ),
-                child: Text('${option['label'] ?? option['id']}'),
+              child: Builder(
+                builder: (context) {
+                  final optionId = option['id'] as String;
+                  return TextButton(
+                    onPressed: optionId == 'apply' && expectedRevision == null
+                        ? null
+                        : () => controller.resolveDecision(
+                            decision,
+                            optionId,
+                            expectedRevision: expectedRevision,
+                          ),
+                    child: Text('${option['label'] ?? optionId}'),
+                  );
+                },
               ),
             ),
       ],
