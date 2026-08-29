@@ -214,7 +214,11 @@ PlaceSearchResult parsePlaceSearchResponse(Object? data) {
     fetchedAt: fetchedAt is String
         ? DateTime.tryParse(fetchedAt)?.toLocal()
         : null,
-    nextCursor: data['next_cursor'] as String?,
+    nextCursor:
+        data['next_cursor'] is String &&
+            (data['next_cursor'] as String).trim().isNotEmpty
+        ? (data['next_cursor'] as String).trim()
+        : null,
     hasMore: data['has_more'] == true,
     isPartial: data['partial'] == true,
     failedTiles: failedTiles is List

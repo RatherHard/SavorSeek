@@ -97,6 +97,21 @@ class PlaceDetailSheet extends StatelessWidget {
                 const SizedBox(height: AppTokens.spaceMd),
                 _DetailRow(icon: Icons.place_outlined, text: place.address!),
               ],
+              if (place.provenance != null) ...[
+                const SizedBox(height: AppTokens.spaceMd),
+                _DetailRow(
+                  icon: Icons.source_outlined,
+                  text: '来源：${place.provenance}',
+                ),
+              ],
+              if (place.coordinateSystem != null) ...[
+                const SizedBox(height: AppTokens.spaceSm),
+                _DetailRow(
+                  icon: Icons.my_location_outlined,
+                  text: '坐标：${place.coordinateSystem}',
+                  isSubtle: true,
+                ),
+              ],
               const SizedBox(height: AppTokens.spaceSm),
               _DetailRow(
                 icon: Icons.schedule_outlined,

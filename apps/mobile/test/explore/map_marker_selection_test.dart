@@ -96,10 +96,7 @@ void main() {
       context: context(width: 1200, height: 1200),
     );
 
-    expect(result.places.map((place) => place.id), [
-      'unrated',
-      'invalid-rating',
-    ]);
+    expect(result.places, isEmpty);
   });
 
   test('keeps only food places with valid coordinates', () {
@@ -135,11 +132,7 @@ void main() {
       context: context(),
     );
 
-    expect(result.places.map((place) => place.id), [
-      'food',
-      'missing-rating',
-      'bad-rating',
-    ]);
+    expect(result.places.map((place) => place.id), ['food']);
   });
 
   test('sorts by rating, then distance and id deterministically', () {

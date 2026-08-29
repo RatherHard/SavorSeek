@@ -31,7 +31,8 @@ export function planSearchPartitions(bounds: SearchBounds): SearchPartition[] {
     ]
     : [bounds];
   const partitions = ranges.flatMap((range) => splitRange(range));
-  return partitions.slice(0, MAX_PARTITIONS).map((partition, index) => ({
+  if (partitions.length > MAX_PARTITIONS) return [];
+  return partitions.map((partition, index) => ({
     ...partition,
     key: `${index}:${partition.bounds.south.toFixed(5)}:${partition.bounds.west.toFixed(5)}:${partition.bounds.north.toFixed(5)}:${partition.bounds.east.toFixed(5)}`,
   }));

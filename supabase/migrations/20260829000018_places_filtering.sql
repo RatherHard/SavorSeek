@@ -1,4 +1,9 @@
 -- Structured place filtering fields. All provider fields remain nullable: absence is unknown.
+alter table public.place_searches
+  drop constraint if exists place_searches_kind_ck;
+alter table public.place_searches
+  add constraint place_searches_kind_ck check (search_kind in ('text', 'around', 'bounds'));
+
 alter table public.places
   add column if not exists cuisine_tags text[],
   add column if not exists price_level smallint,
@@ -28,13 +33,14 @@ alter table public.places
     cuisine_tags is null or cardinality(cuisine_tags) <= 32
   );
 
-create index if not exists places_cuisine_tags_gin_idx
-  on public.places using gin (cuisine_tags);
 create index if not exists places_filter_lat_lng_idx
   on public.places (latitude, longitude, id)
   where coordinate_system = 'gcj02'
     and latitude is not null
     and longitude is not null;
+
+create index if not exists places_cuisine_tags_gin_idx
+  on public.places using gin (cuisine_tags);
 
 -- Public clients use the Edge Function projection, not the raw cache table.
 revoke select on table public.places from anon, authenticated;

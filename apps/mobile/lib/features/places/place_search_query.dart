@@ -163,6 +163,26 @@ class PlaceSearchQuery {
 
   String get canonicalKey => jsonEncode(toJson());
 
+  PlaceSearchQuery copyWith({
+    PlaceSearchBounds? bounds,
+    String? keywords,
+    String? city,
+    PlaceSearchOrigin? origin,
+    PlaceSearchFilters? filters,
+    int? limit,
+    String? cursor,
+  }) {
+    return PlaceSearchQuery(
+      bounds: bounds ?? this.bounds,
+      keywords: keywords ?? this.keywords,
+      city: city ?? this.city,
+      origin: origin ?? this.origin,
+      filters: filters ?? this.filters,
+      limit: limit ?? this.limit,
+      cursor: cursor,
+    );
+  }
+
   static String? _trimmed(String? value) {
     final trimmed = value?.trim();
     return trimmed == null || trimmed.isEmpty ? null : trimmed;

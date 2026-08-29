@@ -59,6 +59,9 @@ export interface NormalizedPlace {
   latitude: number | null;
   longitude: number | null;
   rating: number | null;
+  cuisine_tags: string[] | null;
+  price_level: number | null;
+  business_status: 'open' | 'closed' | 'unknown' | null;
   raw: Record<string, string> | null;
 }
 
@@ -242,6 +245,9 @@ function normalizePoi(poi: unknown): NormalizedPlace | null {
     latitude,
     longitude,
     rating: readRating(row.biz_ext),
+    cuisine_tags: readCuisineTags(row.type),
+    price_level: readPriceLevel(row.biz_ext),
+    business_status: readBusinessStatus(row),
     raw: buildRaw(row),
   };
 }
@@ -271,6 +277,32 @@ function readRating(value: unknown): number | null {
   if (typeof raw === 'string' && raw.trim() === '') return null;
   const rating = typeof raw === 'number' ? raw : Number(raw);
   return Number.isFinite(rating) && rating >= 0 && rating <= 5 ? rating : null;
+}
+
+function readCuisineTags(value: unknown): string[] | null {
+  const category = readString(value);
+  if (!category) return null;
+  const tags = category.split(/[;；]/).map((tag) => tag.trim()).filter(Boolean);
+  return tags.length > 0 ? [...new Set(tags)].slice(0, 32) : null;
+}
+
+function readPriceLevel(value: unknown): number | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const raw = (value as Record<string, unknown>).price_level;
+  if (typeof raw !== 'number' && typeof raw !== 'string') return null;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 4 ? parsed : null;
+}
+
+function readBusinessStatus(row: Record<string, unknown>): 'open' | 'closed' | 'unknown' | null {
+  const raw = readString(row.business_status ?? row.status);
+  if (!raw) return null;
+  const normalized = raw.toLowerCase();
+  if (['open', '营业', '营业中'].includes(normalized)) return 'open';
+  if (['closed', '歇业', '停业'].includes(normalized)) return 'closed';
+  return 'unknown';
 }
 
 /** 只留展示与溯源必需的字段，不留存完整响应。 */

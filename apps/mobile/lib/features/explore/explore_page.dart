@@ -145,14 +145,17 @@ class _ExplorePageState extends State<ExplorePage> {
       );
       if (query == null || query.key == _scheduledViewportKey) return;
       _scheduledViewportKey = query.key;
-      unawaited(
-        search.searchAround(
+      unawaited(() async {
+        await search.searchAround(
           latitude: query.center.latitude,
           longitude: query.center.longitude,
           radiusMeters: query.radiusMeters,
           queryKey: query.key,
-        ),
-      );
+        );
+        if (mounted && _scheduledViewportKey == query.key) {
+          _scheduledViewportKey = null;
+        }
+      }());
     });
   }
 
@@ -310,7 +313,8 @@ class _ExplorePageState extends State<ExplorePage> {
           bottom: AppTokens.spaceMd,
           child: notice,
         ),
-      if (widget.favoriteController != null && foodPlaces.isNotEmpty)
+      if (widget.favoriteController != null &&
+          (foodPlaces.isNotEmpty || _hasPartialResult(search)))
         Positioned.fill(
           child: PlaceResultsDrawer(
             places: foodPlaces,
@@ -321,6 +325,19 @@ class _ExplorePageState extends State<ExplorePage> {
                 widget.favoriteController!.toggle(placeId),
             onRetryFavorite: (placeId) =>
                 widget.favoriteController!.retry(placeId),
+            hasMore: search.hasMore,
+            isLoadingMore: search.isLoadingMore,
+            paginationError: search.state is PlaceSearchLoaded
+                ? (search.state as PlaceSearchLoaded).loadMoreError
+                : null,
+            onLoadMore: search.hasMore ? search.loadMore : null,
+            onRetryPagination:
+                search.state is PlaceSearchLoaded &&
+                    (search.state as PlaceSearchLoaded).loadMoreError != null
+                ? search.loadMore
+                : null,
+            isPartial: _hasPartialResult(search),
+            onRetryPartial: _hasPartialResult(search) ? search.retry : null,
             onUnauthenticatedFavorite: widget.auth?.isSignedIn == false
                 ? (_) async {
                     await showAuthSheet(context, auth: widget.auth!);
@@ -359,15 +376,33 @@ class _ExplorePageState extends State<ExplorePage> {
     ];
   }
 
-  /// 按状态给出各不相同的提示。
+  bool _hasPartialResult(PlaceSearchController search) {
+    final state = search.state;
+    return state is PlaceSearchLoaded && state.result.isPartial;
+  }
+
   ///
   /// 设计文档 §12 明确要求不能一律显示「暂未找到」：空结果、数据源不可用、
   /// 视野无效、未登录是不同的成因，对应的下一步动作也不同。
   Widget? _statusNotice(PlaceSearchController search) {
     return switch (search.state) {
-      PlaceSearchEmpty(:final keywords) => _MapNotice(
-        icon: Icons.search_off,
-        message: '没有找到与「$keywords」相符的地点。换个说法或扩大范围再试试。',
+      PlaceSearchEmpty(
+        :final keywords,
+        :final source,
+        :final hasPreviousResult,
+      ) =>
+        _MapNotice(
+          icon: Icons.search_off,
+          message: source == PlaceSearchSource.viewport
+              ? (hasPreviousResult
+                    ? '当前地图范围暂无新的地点，仍保留上一批结果。'
+                    : '当前地图范围暂无符合条件的地点。')
+              : '没有找到与「$keywords」相符的地点。换个说法或扩大范围再试试。',
+        ),
+      PlaceSearchLoaded(:final result) when result.isPartial => _MapNotice(
+        icon: Icons.warning_amber_outlined,
+        message: '部分地点已加载，部分区域暂不可用。',
+        onRetry: search.retry,
       ),
       PlaceSearchFailed(:final message, :final failure, :final isRetryable) =>
         _MapNotice(

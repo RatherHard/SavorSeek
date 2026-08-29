@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import 'place_models.dart';
 import 'place_repository.dart';
+import 'place_search_query.dart';
 
 /// 查询结果的来源。
 enum PlaceSearchSource { keyword, viewport }
@@ -32,14 +33,39 @@ final class PlaceSearchLoaded extends PlaceSearchState {
     required this.result,
     this.source = PlaceSearchSource.keyword,
     this.queryKey,
+    this.query,
+    this.isLoadingMore = false,
+    this.loadMoreError,
   });
 
   final String keywords;
   final PlaceSearchResult result;
   final PlaceSearchSource source;
   final String? queryKey;
+  final PlaceSearchQuery? query;
+  final bool isLoadingMore;
+  final String? loadMoreError;
 
   List<Place> get places => result.places;
+
+  PlaceSearchLoaded copyWith({
+    PlaceSearchResult? result,
+    bool? isLoadingMore,
+    String? loadMoreError,
+    bool clearLoadMoreError = false,
+  }) {
+    return PlaceSearchLoaded(
+      keywords: keywords,
+      result: result ?? this.result,
+      source: source,
+      queryKey: queryKey,
+      query: query,
+      isLoadingMore: isLoadingMore ?? this.isLoadingMore,
+      loadMoreError: clearLoadMoreError
+          ? null
+          : loadMoreError ?? this.loadMoreError,
+    );
+  }
 }
 
 /// 检索成功但无结果。
@@ -50,10 +76,12 @@ final class PlaceSearchEmpty extends PlaceSearchState {
   const PlaceSearchEmpty(
     this.keywords, {
     this.source = PlaceSearchSource.keyword,
+    this.hasPreviousResult = false,
   });
 
   final String keywords;
   final PlaceSearchSource source;
+  final bool hasPreviousResult;
 }
 
 final class PlaceSearchFailed extends PlaceSearchState {
@@ -107,6 +135,8 @@ class PlaceSearchController extends ChangeNotifier {
   PlaceSearchResult? _viewportResult;
   PlaceSearchResult? _keywordResult;
   String? _lastViewportKeywords;
+  PlaceSearchQuery? _lastStructuredQuery;
+  bool _isLoadingMore = false;
   double? _lastViewportLatitude;
   double? _lastViewportLongitude;
   int? _lastViewportRadius;
@@ -145,6 +175,15 @@ class PlaceSearchController extends ChangeNotifier {
 
   bool get hasViewportResult => _viewportResult != null;
 
+  bool get isLoadingMore => _isLoadingMore;
+
+  bool get hasMore {
+    final state = _state;
+    return state is PlaceSearchLoaded &&
+        state.result.hasMore &&
+        state.result.nextCursor?.isNotEmpty == true;
+  }
+
   Future<void> searchAround({
     required double latitude,
     required double longitude,
@@ -152,12 +191,16 @@ class PlaceSearchController extends ChangeNotifier {
     String? queryKey,
     String? keywords,
   }) async {
-    if (queryKey != null && queryKey == _lastViewportKey) return;
+    if (queryKey != null &&
+        queryKey == _lastViewportKey &&
+        _viewportResult != null) {
+      return;
+    }
 
     final requestId = ++_requestId;
     final previous = _viewportResult;
     final trimmed = keywords?.trim() ?? '';
-    _lastViewportKey = queryKey;
+    _lastStructuredQuery = null;
     _lastViewportKeywords = trimmed;
     _lastViewportLatitude = latitude;
     _lastViewportLongitude = longitude;
@@ -229,6 +272,177 @@ class PlaceSearchController extends ChangeNotifier {
 
   List<Place>? get viewportPlaces => _viewportResult?.places;
 
+  Future<void> searchStructured({
+    required PlaceSearchQuery query,
+    String? queryKey,
+  }) async {
+    if (queryKey != null &&
+        queryKey == _lastViewportKey &&
+        _viewportResult != null) {
+      return;
+    }
+
+    final requestId = ++_requestId;
+    final previous = _viewportResult;
+    final trimmed = query.keywords?.trim() ?? '';
+    _lastViewportKey = queryKey;
+    _setState(PlaceSearchLoading(trimmed, source: PlaceSearchSource.viewport));
+
+    try {
+      final result = await _repository.search(query);
+      if (_isStale(requestId)) return;
+      _viewportResult = result;
+      _setState(
+        result.isEmpty
+            ? PlaceSearchEmpty(
+                trimmed,
+                source: PlaceSearchSource.viewport,
+                hasPreviousResult: previous != null && !previous.isEmpty,
+              )
+            : PlaceSearchLoaded(
+                keywords: trimmed,
+                result: result,
+                source: PlaceSearchSource.viewport,
+                queryKey: queryKey,
+                query: query,
+              ),
+      );
+    } on PlaceSearchException catch (error) {
+      if (_isStale(requestId)) return;
+      _setState(
+        PlaceSearchFailed(
+          keywords: trimmed,
+          message: error.message,
+          failure: error.failure,
+          source: PlaceSearchSource.viewport,
+          queryKey: queryKey,
+          hasPreviousResult: previous != null && !previous.isEmpty,
+        ),
+      );
+    } on Exception {
+      if (_isStale(requestId)) return;
+      _setState(
+        PlaceSearchFailed(
+          keywords: trimmed,
+          message: '地点检索暂时不可用，请稍后重试。',
+          failure: PlaceSearchFailure.storageFailure,
+          source: PlaceSearchSource.viewport,
+          queryKey: queryKey,
+          hasPreviousResult: previous != null && !previous.isEmpty,
+        ),
+      );
+    }
+  }
+
+  Future<void> search(PlaceSearchQuery query) async {
+    final requestId = ++_requestId;
+    _selected = null;
+    _keywordResult = null;
+    _viewportResult = null;
+    _lastViewportKey = null;
+    _lastStructuredQuery = query;
+    _setState(
+      PlaceSearchLoading(
+        query.keywords?.trim() ?? '',
+        source: PlaceSearchSource.keyword,
+      ),
+    );
+
+    try {
+      final result = await _repository.search(query);
+      if (_isStale(requestId)) return;
+      _keywordResult = result;
+      _setState(
+        result.isEmpty && !result.isPartial
+            ? PlaceSearchEmpty(query.keywords?.trim() ?? '')
+            : PlaceSearchLoaded(
+                keywords: query.keywords?.trim() ?? '',
+                result: result,
+                query: query,
+              ),
+      );
+    } on PlaceSearchException catch (error) {
+      if (_isStale(requestId)) return;
+      _setState(
+        PlaceSearchFailed(
+          keywords: query.keywords?.trim() ?? '',
+          message: error.message,
+          failure: error.failure,
+        ),
+      );
+    } on Exception {
+      if (_isStale(requestId)) return;
+      _setState(
+        PlaceSearchFailed(
+          keywords: query.keywords?.trim() ?? '',
+          message: '地点检索暂时不可用，请稍后重试。',
+          failure: PlaceSearchFailure.storageFailure,
+        ),
+      );
+    }
+  }
+
+  Future<void> loadMore() async {
+    if (_isLoadingMore || _lastStructuredQuery == null) return;
+    final current = _state;
+    if (current is! PlaceSearchLoaded ||
+        current.source != PlaceSearchSource.keyword ||
+        current.query == null ||
+        !current.result.hasMore ||
+        current.result.nextCursor == null) {
+      return;
+    }
+
+    _isLoadingMore = true;
+    _setState(current.copyWith(isLoadingMore: true, clearLoadMoreError: true));
+    final requestId = _requestId;
+    try {
+      final nextQuery = _lastStructuredQuery!.copyWith(
+        cursor: current.result.nextCursor,
+      );
+      final next = await _repository.search(nextQuery);
+      if (_isStale(requestId)) return;
+      final merged = _mergeResults(current.result, next);
+      _setState(current.copyWith(result: merged, isLoadingMore: false));
+    } on PlaceSearchException catch (error) {
+      if (_isStale(requestId)) return;
+      _setState(
+        current.copyWith(isLoadingMore: false, loadMoreError: error.message),
+      );
+    } on Exception {
+      if (_isStale(requestId)) return;
+      _setState(
+        current.copyWith(isLoadingMore: false, loadMoreError: '加载更多地点失败，请重试。'),
+      );
+    } finally {
+      _isLoadingMore = false;
+    }
+  }
+
+  PlaceSearchResult _mergeResults(
+    PlaceSearchResult first,
+    PlaceSearchResult second,
+  ) {
+    final byId = <String, Place>{
+      for (final place in first.places) place.id: place,
+    };
+    for (final place in second.places) {
+      byId.putIfAbsent(place.id, () => place);
+    }
+    return PlaceSearchResult(
+      places: List.unmodifiable(byId.values),
+      fromCache: first.fromCache && second.fromCache,
+      fetchedAt: second.fetchedAt ?? first.fetchedAt,
+      nextCursor: second.nextCursor,
+      hasMore: second.hasMore,
+      isPartial: first.isPartial || second.isPartial,
+      failedTiles: List.unmodifiable({
+        ...first.failedTiles,
+        ...second.failedTiles,
+      }),
+    );
+  }
+
   Future<void> searchByKeywords(String keywords, {String? city}) async {
     final trimmed = keywords.trim();
     if (trimmed.isEmpty) return;
@@ -239,6 +453,7 @@ class PlaceSearchController extends ChangeNotifier {
     _keywordResult = null;
     _viewportResult = null;
     _lastViewportKey = null;
+    _lastStructuredQuery = null;
     _setState(PlaceSearchLoading(trimmed));
 
     try {
@@ -251,7 +466,7 @@ class PlaceSearchController extends ChangeNotifier {
       _setState(
         result.isEmpty
             ? PlaceSearchEmpty(trimmed)
-            : PlaceSearchLoaded(keywords: trimmed, result: result),
+            : PlaceSearchLoaded(keywords: trimmed, result: result, query: null),
       );
     } on PlaceSearchException catch (error) {
       if (_isStale(requestId)) return;
@@ -276,6 +491,11 @@ class PlaceSearchController extends ChangeNotifier {
 
   /// 重试上一次检索。仅在失败或空结果状态下有意义。
   Future<void> retry({String? city}) async {
+    if (_lastStructuredQuery != null &&
+        (_state is PlaceSearchFailed || _state is PlaceSearchEmpty)) {
+      await search(_lastStructuredQuery!);
+      return;
+    }
     final source = switch (_state) {
       PlaceSearchFailed(:final source) => source,
       PlaceSearchEmpty(:final source) => source,
