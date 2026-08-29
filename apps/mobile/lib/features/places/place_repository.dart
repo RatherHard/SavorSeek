@@ -207,7 +207,6 @@ PlaceSearchResult parsePlaceSearchResponse(Object? data) {
             .toList(growable: false)
       : const <Place>[];
   final fetchedAt = data['fetched_at'];
-  final nextCursor = data['next_cursor'];
   final failedTiles = data['failed_tiles'];
   return PlaceSearchResult(
     places: places,
@@ -215,7 +214,11 @@ PlaceSearchResult parsePlaceSearchResponse(Object? data) {
     fetchedAt: fetchedAt is String
         ? DateTime.tryParse(fetchedAt)?.toLocal()
         : null,
-    nextCursor: nextCursor is String ? nextCursor : null,
+    nextCursor:
+        data['next_cursor'] is String &&
+            (data['next_cursor'] as String).trim().isNotEmpty
+        ? (data['next_cursor'] as String).trim()
+        : null,
     hasMore: data['has_more'] == true,
     isPartial: data['partial'] == true,
     failedTiles: failedTiles is List

@@ -19,6 +19,8 @@ class Place {
     this.cuisineTags = const [],
     this.priceLevel,
     this.businessStatus,
+    this.provenance,
+    this.coordinateSystem,
   }) : assert((latitude == null) == (longitude == null), '经纬度必须同时提供或同时省略');
 
   final String id;
@@ -35,6 +37,12 @@ class Place {
   final List<String> cuisineTags;
   final int? priceLevel;
   final PlaceBusinessStatus? businessStatus;
+
+  /// Human-readable data provenance, when supplied by the search backend.
+  final String? provenance;
+
+  /// Coordinate reference system used by the provider, such as `gcj02`.
+  final String? coordinateSystem;
 
   /// 该地点信息的抓取时间，用于向用户说明「信息更新于 X」。
   ///
@@ -71,6 +79,8 @@ class Place {
       cuisineTags: _readTags(json['cuisine_tags']),
       priceLevel: _readPriceLevel(json['price_level']),
       businessStatus: _readBusinessStatus(json['business_status']),
+      provenance: _readString(json['provenance'] ?? json['source']),
+      coordinateSystem: _readString(json['coordinate_system']),
       fetchedAt: DateTime.parse(json['fetched_at'] as String).toLocal(),
     );
   }
@@ -104,6 +114,12 @@ class Place {
     if (value is num) return value.toDouble();
     if (value is String) return double.tryParse(value);
     return null;
+  }
+
+  static String? _readString(Object? value) {
+    if (value is! String) return null;
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
   }
 }
 

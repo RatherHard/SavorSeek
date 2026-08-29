@@ -275,6 +275,7 @@ int _compareCellKeys(String a, String b) {
 bool _isEligible(Place place) =>
     place.id.trim().isNotEmpty &&
     isFoodCategory(place.category) &&
+    isValidAmapRating(place.rating) &&
     place.latitude != null &&
     place.longitude != null &&
     place.latitude!.isFinite &&
