@@ -7,6 +7,7 @@ import 'package:x_amap_base/x_amap_base.dart';
 import 'package:savorseek/app/config/amap_config.dart';
 import 'package:savorseek/app/theme/design_tokens.dart';
 import 'package:savorseek/features/explore/agent_command_bar.dart';
+import 'package:savorseek/features/agent/agent_context.dart';
 import 'package:savorseek/features/agent/agent_controller.dart';
 import 'package:savorseek/features/agent/agent_workspace_panel.dart';
 import 'package:savorseek/features/explore/amap_consent.dart';
@@ -190,7 +191,26 @@ class _ExplorePageState extends State<ExplorePage> {
   Future<void> _submitCommand(String command) async {
     final agent = widget.agentController;
     if (agent != null) {
-      await agent.submit(command);
+      final position = _lastCameraPosition ?? AmapSurface.initialCamera;
+      final size = _mapSize;
+      final viewport = size == null
+          ? null
+          : buildMapViewportQuery(
+              latitude: position.target.latitude,
+              longitude: position.target.longitude,
+              zoom: position.zoom,
+              width: size.width,
+              height: size.height,
+            );
+      await agent.submit(
+        command,
+        context: AgentSubmitContext(
+          mapViewport: viewport == null
+              ? null
+              : AgentMapViewport.fromQuery(viewport),
+          selectedPlaceIds: [?_search?.selected?.id],
+        ),
+      );
       return;
     }
     await _search?.searchByKeywords(command, city: _defaultCity);
@@ -270,12 +290,14 @@ class _ExplorePageState extends State<ExplorePage> {
               return Stack(
                 children: [
                   Positioned.fill(child: _buildMapArea()),
-                   if (search != null) ..._buildOverlays(search),
+                  if (search != null) ..._buildOverlays(search),
                   if (widget.agentController != null)
                     Positioned.fill(
                       child: IgnorePointer(
                         ignoring: !widget.agentController!.hasSession,
-                        child: AgentWorkspacePanel(controller: widget.agentController!),
+                        child: AgentWorkspacePanel(
+                          controller: widget.agentController!,
+                        ),
                       ),
                     ),
                 ],
@@ -287,7 +309,10 @@ class _ExplorePageState extends State<ExplorePage> {
         AgentCommandBar(
           // 未注入仓库或正在检索时不接受新指令：前者点了没有反馈，
           // 后者会让两次结果竞争。
-          onSubmit: search == null || search.isLoading || widget.agentController?.isSubmitting == true
+          onSubmit:
+              search == null ||
+                  search.isLoading ||
+                  widget.agentController?.isSubmitting == true
               ? null
               : _submitCommand,
         ),

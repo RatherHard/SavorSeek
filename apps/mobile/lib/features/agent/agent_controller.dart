@@ -4,19 +4,19 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:savorseek/app/util/uuid.dart';
+import 'package:savorseek/features/agent/agent_context.dart';
 import 'package:savorseek/features/agent/agent_models.dart';
 import 'package:savorseek/features/agent/agent_event_reducer.dart';
 import 'package:savorseek/features/agent/agent_repository.dart';
 
 class AgentController extends ChangeNotifier {
-  AgentController({required this.repository, SupabaseClient? client})
-      : _client = client ?? Supabase.instance.client;
+  AgentController({required this.repository, this._client});
 
   final AgentRepository repository;
-  final SupabaseClient _client;
+  final SupabaseClient? _client;
   AgentWorkspaceSnapshot _snapshot = const AgentWorkspaceSnapshot();
   RealtimeChannel? _channel;
-  AgentEventReducer _events = AgentEventReducer();
+  final AgentEventReducer _events = AgentEventReducer();
   String? _sessionId;
   bool _isSubmitting = false;
   String? _error;
@@ -26,7 +26,12 @@ class AgentController extends ChangeNotifier {
   String? get error => _error;
   bool get hasSession => _sessionId != null;
 
-  Future<void> submit(String text) async {
+  Future<void> submit(
+    String text, {
+    AgentSubmitContext context = const AgentSubmitContext(),
+    Map<String, dynamic> constraints = const {},
+    String taskType = 'discover_places',
+  }) async {
     if (_isSubmitting || text.trim().isEmpty) return;
     _isSubmitting = true;
     _error = null;
@@ -37,7 +42,9 @@ class AgentController extends ChangeNotifier {
         title: '美食探索',
         goal: text.trim(),
         clientRequestId: _newRequestId(),
-        constraints: const {},
+        taskType: taskType,
+        context: context.toJson(),
+        constraints: constraints,
       );
       await _activate(result);
     } on AgentRepositoryException catch (error) {
@@ -94,7 +101,10 @@ class AgentController extends ChangeNotifier {
     final sessionId = _sessionId;
     if (sessionId == null) return;
     try {
-      await repository.rejectRecommendation(sessionId: sessionId, recommendationSetId: set.id);
+      await repository.rejectRecommendation(
+        sessionId: sessionId,
+        recommendationSetId: set.id,
+      );
       await refresh();
     } on AgentRepositoryException catch (error) {
       _error = error.message;
@@ -102,11 +112,52 @@ class AgentController extends ChangeNotifier {
     }
   }
 
-  Future<void> resolveDecision(Map<String, dynamic> decision, String optionId) async {
-    final id = decision['id'];
-    if (id is! String) return;
+  Future<void> retryTask(AgentTask task) async {
     try {
-      await repository.resolveDecision(checkpointId: id, optionId: optionId);
+      await repository.retryTask(task.id);
+      await refresh();
+    } on AgentRepositoryException catch (error) {
+      _error = error.message;
+      notifyListeners();
+    }
+  }
+
+  Future<void> resolveDecision(
+    Map<String, dynamic> decision,
+    String optionId, {
+    int? expectedRevision,
+  }) async {
+    final id = decision['id'];
+    if (id is! String || optionId.trim().isEmpty) return;
+    if (optionId == 'apply' && expectedRevision == null) {
+      _error = '无法应用路线草案：缺少当前行程版本，请先刷新行程。';
+      notifyListeners();
+      return;
+    }
+    try {
+      await repository.resolveDecision(
+        checkpointId: id,
+        optionId: optionId,
+        expectedRevision: expectedRevision,
+        idempotencyKey: optionId == 'apply' ? _newRequestId() : null,
+      );
+      await refresh();
+    } on AgentRepositoryException catch (error) {
+      _error = error.message;
+      notifyListeners();
+    }
+  }
+
+  Future<void> applyDraft({
+    required String draftId,
+    required int expectedRevision,
+  }) async {
+    try {
+      await repository.applyDraft(
+        draftId: draftId,
+        expectedRevision: expectedRevision,
+        idempotencyKey: _newRequestId(),
+      );
       await refresh();
     } on AgentRepositoryException catch (error) {
       _error = error.message;
@@ -126,8 +177,10 @@ class AgentController extends ChangeNotifier {
   }
 
   Future<void> _subscribe(String sessionId) async {
+    final client = _client;
+    if (client == null) return;
     await _channel?.unsubscribe();
-    _channel = _client
+    _channel = client
         .channel('agent-session-$sessionId')
         .onPostgresChanges(
           event: PostgresChangeEvent.insert,

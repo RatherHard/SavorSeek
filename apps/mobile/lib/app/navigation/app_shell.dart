@@ -39,6 +39,7 @@ class _AppShellState extends State<AppShell> {
   )..loadFavoritePlaceIds();
   late final AgentController _agent = AgentController(
     repository: widget.dependencies.agentRepository,
+    client: widget.dependencies.supabaseClient,
   );
 
   @override
