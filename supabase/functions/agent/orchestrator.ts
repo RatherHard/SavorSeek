@@ -332,14 +332,22 @@ export async function runOrchestration(
       artifactId: (storedArtifact as Record<string, unknown>)['id'],
       artifactType: 'recommendation_set',
     });
-    const { error } = await serviceClient.from('recommendation_sets').insert({
-      session_id: sessionId,
-      task_id: taskId,
-      status: 'generated',
-      items: ctx.recommendations,
-    });
-    if (error) {
-      throw new OrchestrationError('present_write_failed', error.message);
+    const { data: existingSet, error: existingError } = await serviceClient
+      .from('recommendation_sets')
+      .select('id')
+      .eq('session_id', sessionId)
+      .in('status', ['draft', 'generated', 'displayed', 'captain_selected'])
+      .maybeSingle();
+    if (existingError) throw new OrchestrationError('present_read_failed', existingError.message);
+    if (!existingSet) {
+      const { error } = await serviceClient.from('recommendation_sets').insert({
+        session_id: sessionId,
+        task_id: taskId,
+        artifact_id: (storedArtifact as Record<string, unknown>)['id'],
+        status: 'generated',
+        items: ctx.recommendations,
+      });
+      if (error) throw new OrchestrationError('present_write_failed', error.message);
     }
     return { summary: `已汇总 ${ctx.recommendations.length} 条推荐结果`, complete: true };
   }, PHASE_TIMEOUT_MS.present);
@@ -394,7 +402,7 @@ async function proposeMemoryFromIntent(deps: OrchestrationDeps, ctx: Orchestrati
   if (proposals.length === 0) return;
 
   for (const proposal of proposals) {
-    const { error } = await deps.serviceClient.from('memory_proposals').insert({
+    const { error } = await deps.serviceClient.from('memory_proposals').upsert({
       session_id: ctx.sessionId,
       task_id: ctx.taskId,
       user_id: ctx.userId,
@@ -403,7 +411,7 @@ async function proposeMemoryFromIntent(deps: OrchestrationDeps, ctx: Orchestrati
       proposed_value: proposal.value,
       confidence: proposal.confidence,
       status: 'proposed',
-    });
+    }, { onConflict: 'session_id,memory_key', ignoreDuplicates: true });
     if (error) {
       console.error('memory proposal insert failed:', error.message);
       continue;
