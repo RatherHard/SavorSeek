@@ -111,6 +111,7 @@ export interface OrchestrationContext {
   verified: VerifiedPlace[];
   recommendations: RecommendationItem[];
   routePath: Array<{ latitude: number; longitude: number }> | null;
+  tripDraftId: string | null;
   degraded: string[];
 }
 
