@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import 'place_models.dart';
 import 'place_repository.dart';
+import 'place_search_query.dart';
 
 /// 查询结果的来源。
 enum PlaceSearchSource { keyword, viewport }
@@ -110,6 +111,7 @@ class PlaceSearchController extends ChangeNotifier {
   double? _lastViewportLatitude;
   double? _lastViewportLongitude;
   int? _lastViewportRadius;
+  PlaceSearchQuery? _lastViewportQuery;
 
   /// 当前应显示的结果。手动关键词结果优先，视野刷新不会静默替换它。
   List<Place> get visiblePlaces {
@@ -227,6 +229,65 @@ class PlaceSearchController extends ChangeNotifier {
     }
   }
 
+  Future<void> searchStructured({
+    required PlaceSearchQuery query,
+    String? queryKey,
+  }) async {
+    if (queryKey != null && queryKey == _lastViewportKey) return;
+    final requestId = ++_requestId;
+    final previous = _viewportResult;
+    _lastViewportKey = queryKey;
+    _lastViewportQuery = query;
+    _setState(
+      PlaceSearchLoading(
+        query.keywords?.trim() ?? '',
+        source: PlaceSearchSource.viewport,
+      ),
+    );
+    try {
+      final result = await _repository.search(query);
+      if (_isStale(requestId)) return;
+      _viewportResult = result;
+      _setState(
+        result.isEmpty
+            ? PlaceSearchEmpty(
+                query.keywords?.trim() ?? '',
+                source: PlaceSearchSource.viewport,
+              )
+            : PlaceSearchLoaded(
+                keywords: query.keywords?.trim() ?? '',
+                result: result,
+                source: PlaceSearchSource.viewport,
+                queryKey: queryKey,
+              ),
+      );
+    } on PlaceSearchException catch (error) {
+      if (_isStale(requestId)) return;
+      _setState(
+        PlaceSearchFailed(
+          keywords: query.keywords?.trim() ?? '',
+          message: error.message,
+          failure: error.failure,
+          source: PlaceSearchSource.viewport,
+          queryKey: queryKey,
+          hasPreviousResult: previous != null && !previous.isEmpty,
+        ),
+      );
+    } on Exception {
+      if (_isStale(requestId)) return;
+      _setState(
+        PlaceSearchFailed(
+          keywords: query.keywords?.trim() ?? '',
+          message: '地点检索暂时不可用，请稍后重试。',
+          failure: PlaceSearchFailure.storageFailure,
+          source: PlaceSearchSource.viewport,
+          queryKey: queryKey,
+          hasPreviousResult: previous != null && !previous.isEmpty,
+        ),
+      );
+    }
+  }
+
   List<Place>? get viewportPlaces => _viewportResult?.places;
 
   Future<void> searchByKeywords(String keywords, {String? city}) async {
@@ -239,6 +300,7 @@ class PlaceSearchController extends ChangeNotifier {
     _keywordResult = null;
     _viewportResult = null;
     _lastViewportKey = null;
+    _lastViewportQuery = null;
     _setState(PlaceSearchLoading(trimmed));
 
     try {
@@ -282,6 +344,11 @@ class PlaceSearchController extends ChangeNotifier {
       _ => null,
     };
     if (source == PlaceSearchSource.viewport) {
+      final query = _lastViewportQuery;
+      if (query != null) {
+        await searchStructured(query: query, queryKey: _lastViewportKey);
+        return;
+      }
       final latitude = _lastViewportLatitude;
       final longitude = _lastViewportLongitude;
       final radius = _lastViewportRadius;
@@ -290,7 +357,7 @@ class PlaceSearchController extends ChangeNotifier {
           latitude: latitude,
           longitude: longitude,
           radiusMeters: radius,
-          queryKey: null,
+          queryKey: _lastViewportKey,
           keywords: _lastViewportKeywords,
         );
       }

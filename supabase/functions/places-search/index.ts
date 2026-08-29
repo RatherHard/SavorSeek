@@ -27,7 +27,6 @@ import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 
 import {
   type AmapQuery,
-  type NormalizedPlace,
   AMAP_EXTENSIONS,
   PAGE_SIZE,
   PLACE_RESPONSE_CONTRACT_VERSION,
@@ -35,11 +34,21 @@ import {
   searchAmapPlaces,
 } from './amap.ts';
 import {
+  planSearchPartitions,
+  type SearchBounds,
+} from './partition.ts';
+import {
+  mergePartitionBatches,
+  type BoundsFilters,
+  type PartitionBatch,
+} from './merge.ts';
+import {
   corsHeaders,
   errorResponse,
   jsonHeaders,
   PlacesSearchError,
 } from './errors.ts';
+
 
 /** 缓存有效期。地点的名称、地址与类别变动缓慢，一天足够新鲜。 */
 const CACHE_TTL_SECONDS = 86_400;
@@ -207,14 +216,8 @@ interface BoundsSearchQuery {
   bounds: { south: number; west: number; north: number; east: number };
   keywords?: string;
   city?: string;
-  filters: {
-    cuisine_tags: string[];
-    min_price_level?: number;
-    max_price_level?: number;
-    max_distance_meters?: number;
-    open_now?: boolean;
-    min_rating?: number;
-  };
+  origin?: { latitude: number; longitude: number };
+  filters: BoundsFilters;
   limit: number;
   cursor?: string;
 }
@@ -237,6 +240,8 @@ function parseBoundsQuery(body: Record<string, unknown>): BoundsSearchQuery {
   }
   const rawFilters = body.filters;
   const filters = parseFilters(rawFilters);
+  const rawOrigin = body.origin;
+  const origin = parseOrigin(rawOrigin);
   const limit = parseLimit(body.limit);
   const keywords = readTrimmed(body.keywords);
   if (keywords && keywords.length > 80) {
@@ -248,6 +253,7 @@ function parseBoundsQuery(body: Record<string, unknown>): BoundsSearchQuery {
     keywords,
     city: readTrimmed(body.city),
     filters,
+    origin,
     limit,
     cursor: readTrimmed(body.cursor),
   };
@@ -297,7 +303,18 @@ function parseFilters(value: unknown): BoundsSearchQuery['filters'] {
   };
 }
 
-function parseLimit(value: unknown): number {
+function parseOrigin(value: unknown): { latitude: number; longitude: number } | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new PlacesSearchError('invalid_request', 'origin 必须是 JSON 对象。');
+  }
+  const row = value as Record<string, unknown>;
+  return {
+    latitude: parseCoordinate(row.latitude, 90, '纬度'),
+    longitude: parseCoordinate(row.longitude, 180, '经度'),
+  };
+}
+
   if (value === undefined || value === null) return 50;
   const limit = Number(value);
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_RESULT_LIMIT) {
@@ -415,13 +432,66 @@ async function resolveBoundsSearch(
     p_ttl_seconds: CACHE_TTL_SECONDS,
   });
   if (cached) return cached as SearchResult;
-  return {
-    places: [],
-    fetched_at: null,
+
+  const key = requireAmapKey();
+  const partitions = planSearchPartitions(query.bounds);
+  const batches: PartitionBatch[] = [];
+  const failedTiles: string[] = [];
+  const requests = partitions.flatMap((partition) =>
+    [1].map((page) => ({ partition, page }))
+  );
+  const settled = await Promise.allSettled(
+    requests.map(async ({ partition, page }) => ({
+      partition,
+      page,
+      places: await searchAmapPlaces({
+        kind: 'around',
+        latitude: partition.latitude,
+        longitude: partition.longitude,
+        radius: partition.radius,
+        keywords: query.keywords,
+        page,
+      }, key),
+    })),
+  );
+  settled.forEach((result, index) => {
+    const request = requests[index];
+    if (result.status === 'fulfilled') {
+      batches.push(result.value);
+    } else {
+      failedTiles.push(`${request.partition.key}:page-${request.page}`);
+    }
+  });
+  if (batches.length === 0) {
+    throw new PlacesSearchError(
+      'provider_unavailable',
+      '地点检索服务暂时不可用，请稍后重试。',
+      'all bounds partitions failed',
+    );
+  }
+  const places = mergePartitionBatches(batches, {
+    bounds: query.bounds,
+    filters: query.filters,
+    origin: query.origin,
+    limit: query.limit,
+  });
+  const result: SearchResult = {
+    places,
+    fetched_at: new Date().toISOString(),
     from_cache: false,
-    partial: true,
-    failed_tiles: ['bounds-search-not-enabled'],
-  } as SearchResult;
+    partial: failedTiles.length > 0,
+    failed_tiles: failedTiles.sort(),
+    has_more: false,
+  };
+  if (failedTiles.length === 0) {
+    const stored = await rpc(serviceClient, 'upsert_amap_places', {
+      p_search_kind: 'bounds',
+      p_query_params: params,
+      p_places: batches.flatMap((batch) => batch.places),
+    });
+    return (stored ?? result) as SearchResult;
+  }
+  return result;
 }
 
 function toBoundsQueryParams(
@@ -432,6 +502,7 @@ function toBoundsQueryParams(
     city: query.city ?? null,
     keywords: query.keywords ?? null,
     filters: query.filters,
+    origin: query.origin ?? null,
     limit: query.limit,
     cursor: query.cursor ?? null,
     contract_version: 'places-filter-v1',

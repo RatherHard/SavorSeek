@@ -59,6 +59,9 @@ export interface NormalizedPlace {
   latitude: number | null;
   longitude: number | null;
   rating: number | null;
+  cuisine_tags: string[];
+  price_level: number | null;
+  business_status: 'open' | 'closed' | 'unknown' | null;
   raw: Record<string, string> | null;
 }
 
@@ -242,6 +245,9 @@ function normalizePoi(poi: unknown): NormalizedPlace | null {
     latitude,
     longitude,
     rating: readRating(row.biz_ext),
+    cuisine_tags: readCuisineTags(row.type),
+    price_level: readPriceLevel(row.biz_ext),
+    business_status: readBusinessStatus(row.biz_ext),
     raw: buildRaw(row),
   };
 }
@@ -273,7 +279,30 @@ function readRating(value: unknown): number | null {
   return Number.isFinite(rating) && rating >= 0 && rating <= 5 ? rating : null;
 }
 
-/** 只留展示与溯源必需的字段，不留存完整响应。 */
+/** Only accept explicitly supplied, bounded provider price levels. */
+function readPriceLevel(value: unknown): number | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const raw = (value as Record<string, unknown>).price_level;
+  const level = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+  return Number.isInteger(level) && level >= 1 && level <= 4 ? level : null;
+}
+
+function readBusinessStatus(value: unknown): 'open' | 'closed' | 'unknown' | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const raw = (value as Record<string, unknown>).business_status;
+  return raw === 'open' || raw === 'closed' || raw === 'unknown' ? raw : null;
+}
+
+function readCuisineTags(value: unknown): string[] {
+  const raw = readString(value);
+  if (!raw) return [];
+  return raw
+    .replaceAll('；', ';')
+    .split(';')
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
 function buildRaw(row: Record<string, unknown>): Record<string, string> | null {
   const raw: Record<string, string> = {};
   for (

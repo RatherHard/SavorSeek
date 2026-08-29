@@ -19,6 +19,7 @@ import 'package:savorseek/features/places/place_detail_sheet.dart';
 import 'package:savorseek/features/places/place_models.dart';
 import 'package:savorseek/features/places/place_repository.dart';
 import 'package:savorseek/features/places/place_search_controller.dart';
+import 'package:savorseek/features/places/place_search_query.dart';
 import 'package:savorseek/features/trip/add_place_to_trip.dart';
 import 'package:savorseek/features/trip/schedule_picker_sheet.dart';
 
@@ -146,10 +147,19 @@ class _ExplorePageState extends State<ExplorePage> {
       if (query == null || query.key == _scheduledViewportKey) return;
       _scheduledViewportKey = query.key;
       unawaited(
-        search.searchAround(
-          latitude: query.center.latitude,
-          longitude: query.center.longitude,
-          radiusMeters: query.radiusMeters,
+        search.searchStructured(
+          query: PlaceSearchQuery(
+            bounds: PlaceSearchBounds(
+              south: query.bounds.south,
+              west: query.bounds.west,
+              north: query.bounds.north,
+              east: query.bounds.east,
+            ),
+            origin: PlaceSearchOrigin(
+              latitude: query.center.latitude,
+              longitude: query.center.longitude,
+            ),
+          ),
           queryKey: query.key,
         ),
       );
