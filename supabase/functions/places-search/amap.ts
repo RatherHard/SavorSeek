@@ -290,13 +290,10 @@ function readPriceLevel(value: unknown): number | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return null;
   }
-  const row = value as Record<string, unknown>;
-  const raw = row.cost ?? row.price_level;
-  if (typeof raw !== 'string' && typeof raw !== 'number') return null;
+  const raw = (value as Record<string, unknown>).price_level;
+  if (typeof raw !== 'number' && typeof raw !== 'string') return null;
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) return null;
-  const level = Math.round(parsed);
-  return level >= 1 && level <= 4 ? level : null;
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 4 ? parsed : null;
 }
 
 function readBusinessStatus(row: Record<string, unknown>): 'open' | 'closed' | 'unknown' | null {

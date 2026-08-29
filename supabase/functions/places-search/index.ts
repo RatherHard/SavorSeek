@@ -443,22 +443,33 @@ async function resolveBoundsSearch(
   if (cached) return applyBoundsResult(cached as SearchResult, query);
 
   const key = requireAmapKey();
-  const partitions = planSearchPartitions(query.bounds).slice(0, BOUNDS_MAX_CALLS);
-  const settled = await mapWithConcurrency(partitions, BOUNDS_CONCURRENCY, async (tile) => {
-    try {
-      const places = await searchAmapPlaces({
-        kind: 'around',
-        latitude: tile.latitude,
-        longitude: tile.longitude,
-        radius: tile.radius,
-        keywords: query.keywords,
-        page: 1,
-      }, key);
-      return { tile: tile.key, places };
-    } catch (error) {
-      return { tile: tile.key, error };
-    }
-  });
+  const partitions = planSearchPartitions(query.bounds);
+  if (partitions.length === 0) {
+    throw new PlacesSearchError(
+      'invalid_request',
+      '地图范围过大，请放大地图后重试。',
+      'bounds exceed partition budget',
+    );
+  }
+  const settled = await mapWithConcurrency(
+    partitions,
+    BOUNDS_CONCURRENCY,
+    async (tile) => {
+      try {
+        const places = await searchAmapPlaces({
+          kind: 'around',
+          latitude: tile.latitude,
+          longitude: tile.longitude,
+          radius: tile.radius,
+          keywords: query.keywords,
+          page: 1,
+        }, key);
+        return { tile: tile.key, places };
+      } catch (error) {
+        return { tile: tile.key, error };
+      }
+    },
+  );
   const failures = settled.filter((item): item is { tile: string; error: unknown } => 'error' in item);
   const succeeded = settled.filter((item): item is { tile: string; places: NormalizedPlace[] } => 'places' in item);
   if (succeeded.length === 0) {
@@ -555,7 +566,7 @@ function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number):
 
 function applyBoundsResult(result: SearchResult, query: BoundsSearchQuery): SearchResult {
   const places = filterBoundsPlaces(result.places as NormalizedPlace[], query);
-  return { ...result, places, count: places.length, has_more: places.length >= query.limit };
+  return { ...result, places, count: places.length, has_more: false };
 }
 
 function toBoundsQueryParams(
@@ -566,8 +577,11 @@ function toBoundsQueryParams(
     city: query.city ?? null,
     keywords: query.keywords ?? null,
     filters: query.filters,
+    origin: query.origin ?? null,
     limit: query.limit,
     cursor: query.cursor ?? null,
+    partition_strategy_version: 'partition-v1',
+    page_strategy_version: 'page1-only-v1',
     contract_version: 'places-filter-v1',
   };
 }

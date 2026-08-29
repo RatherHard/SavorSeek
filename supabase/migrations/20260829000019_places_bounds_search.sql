@@ -16,6 +16,12 @@ as $$
   select jsonb_build_object(
     'id', p.id,
     'provider_place_id', p.provider_place_id,
+    'provenance', case p.provider
+      when 'amap' then '高德地图'
+      when 'manual' then '人工录入'
+      else null
+    end,
+    'coordinate_system', p.coordinate_system,
     'name', p.name,
     'category', p.category,
     'address', p.address,
