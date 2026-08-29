@@ -19,6 +19,7 @@ import 'package:savorseek/features/places/place_detail_sheet.dart';
 import 'package:savorseek/features/places/place_models.dart';
 import 'package:savorseek/features/places/place_repository.dart';
 import 'package:savorseek/features/places/place_search_controller.dart';
+import 'package:savorseek/features/places/place_search_query.dart';
 import 'package:savorseek/features/trip/add_place_to_trip.dart';
 import 'package:savorseek/features/trip/schedule_picker_sheet.dart';
 
