@@ -126,11 +126,13 @@ export function planRoute(
 export function toTripDraftItems(
   stops: RouteStop[],
   recommendations: RecommendationItem[],
+  placeIds: Map<string, string> = new Map(),
 ): Array<Record<string, unknown>> {
   return stops.map((stop) => {
     const rankItem = recommendations.find((item) => item.name === stop.name);
     return {
       itemType: stop.itemType,
+      placeId: placeIds.get(stop.name) ?? stop.placeId,
       title: stop.name,
       localDate: stop.localDate,
       plannedStartAt: stop.plannedStartAt,

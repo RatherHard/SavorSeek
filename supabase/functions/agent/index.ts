@@ -129,6 +129,14 @@ async function handle(
     if (error) throw rpcToHttp(error);
     return json({ ok: true, ...(data as Record<string, unknown>) });
   }
+  if (command === 'retry_task') {
+    requireUuid(body['taskId'], 'invalid_task_id');
+    const { data, error } = await userClient.rpc('retry_agent_task', { p_task_id: body['taskId'] }) as RpcResult;
+    if (error) throw rpcToHttp(error);
+    const retry = data as Record<string, unknown>;
+    void runOrchestration(serviceClient, userId, String(retry['sessionId']), String(retry['commandId']), String(retry['taskId']));
+    return json({ ok: true, ...retry });
+  }
   if (command === 'select_recommendation') {
     requireUuid(body['sessionId'], 'invalid_session_id');
     requireUuid(body['recommendationSetId'], 'invalid_recommendation_set_id');
@@ -150,6 +158,48 @@ async function handle(
     const { data, error } = await userClient.rpc('reject_recommendation', {
       p_session_id: body['sessionId'],
       p_recommendation_set_id: body['recommendationSetId'],
+    }) as RpcResult;
+    if (error) throw rpcToHttp(error);
+    return json({ ok: true, ...(data as Record<string, unknown>) });
+  }
+  if (command === 'compare_recommendations') {
+    requireUuid(body['sessionId'], 'invalid_session_id');
+    const names = body['placeNames'];
+    if (!Array.isArray(names) || names.length < 2 || names.length > 5 || !names.every((name) => typeof name === 'string')) {
+      throw new RpcError(400, 'invalid_place_names');
+    }
+    const { data, error } = await userClient.rpc('get_squad_session_projection', { p_session_id: body['sessionId'] }) as RpcResult;
+    if (error) throw rpcToHttp(error);
+    const projection = data as Record<string, unknown>;
+    const sets = Array.isArray(projection['recommendations']) ? projection['recommendations'] : [];
+    return json({ ok: true, comparison: compareNamedItems(sets, names as string[]) });
+  }
+  if (command === 'save_place') {
+    requireUuid(body['placeId'], 'invalid_place_id');
+    requireUuid(body['idempotencyKey'], 'invalid_idempotency_key');
+    const { data, error } = await userClient.rpc(body['saved'] == false ? 'remove_favorite' : 'add_favorite', {
+      p_place_id: body['placeId'], p_idempotency_key: body['idempotencyKey'],
+    }) as RpcResult;
+    if (error) throw rpcToHttp(error);
+    return json({ ok: true, ...(data as Record<string, unknown>) });
+  }
+  if (command === 'modify_trip_item') {
+    requireUuid(body['tripId'], 'invalid_trip_id');
+    requireUuid(body['tripItemId'], 'invalid_trip_item_id');
+    requireUuid(body['idempotencyKey'], 'invalid_idempotency_key');
+    const revision = body['expectedRevision'];
+    const localDate = body['localDate'];
+    const startAt = body['plannedStartAt'];
+    const endAt = body['plannedEndAt'];
+    const timeSlot = body['timeSlot'];
+    if (typeof revision !== 'number' || !Number.isInteger(revision) || revision < 1 ||
+        typeof localDate !== 'string' || typeof startAt !== 'string' || typeof endAt !== 'string' || typeof timeSlot !== 'string') {
+      throw new RpcError(400, 'invalid_trip_item_change');
+    }
+    const { data, error } = await userClient.rpc('reschedule_trip_item_on_date', {
+      p_trip_id: body['tripId'], p_expected_revision: revision, p_idempotency_key: body['idempotencyKey'],
+      p_trip_item_id: body['tripItemId'], p_local_date: localDate,
+      p_planned_start_at: startAt, p_planned_end_at: endAt, p_time_slot: timeSlot,
     }) as RpcResult;
     if (error) throw rpcToHttp(error);
     return json({ ok: true, ...(data as Record<string, unknown>) });
@@ -328,4 +378,15 @@ function rpcToHttp(error: { message: string }): RpcError {
   if (/already (resolved|resolved|applied|selectable|rejectable)/.test(message)) return new RpcError(409, 'already_resolved', message);
   if (/reused with different/.test(message)) return new RpcError(409, 'idempotency_conflict', message);
   return new RpcError(400, 'rpc_rejected', message);
+}
+
+function compareNamedItems(sets: unknown[], names: string[]): unknown[] {
+  const items: unknown[] = [];
+  for (const set of sets) {
+    if (!isObject(set) || !Array.isArray(set['items'])) continue;
+    for (const item of set['items']) {
+      if (isObject(item) && typeof item['name'] === 'string' && names.includes(item['name'])) items.push(item);
+    }
+  }
+  return items;
 }
