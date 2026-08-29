@@ -14,6 +14,7 @@ import { verifyCandidates } from './fact.ts';
 import { parseCommandIntent } from './intent.ts';
 import { readMemorySignals } from './memory.ts';
 import { rankPlaces } from './recommend.ts';
+import { planRoute, toTripDraftItems } from './route.ts';
 import { searchAmapPlaces, requireAmapKey, type AmapQuery } from '../places-search/amap.ts';
 import {
   OrchestrationError,
@@ -29,6 +30,7 @@ const PHASE_TIMEOUT_MS: Record<string, number> = {
   map: 15_000,
   fact: 10_000,
   recommend: 8_000,
+  route: 15_000,
   present: 5_000,
 };
 
@@ -70,6 +72,7 @@ export async function runOrchestration(
     verified: [],
     recommendations: [],
     routePath: null,
+    tripDraftId: null,
     degraded: [],
   };
 
@@ -164,7 +167,58 @@ export async function runOrchestration(
   }, PHASE_TIMEOUT_MS.recommend);
   if (await checkCancelled(deps, sessionId)) return;
 
-  // ── Phase F：Present 汇总落库（E 阶段路线在本轮延后）────────────
+  // ── Phase E（可选）：Route 生成行程草案 ─────────────────────────
+  const wantRoute = ctx.intent!.needRoute ||
+    ctx.taskType === 'plan_route' ||
+    ctx.taskType === 'replan_trip';
+  if (wantRoute) {
+    await runPhase(deps, ctx, 'route_planner', 'route', async () => {
+      const route = planRoute(usable, ctx.recommendations, {
+        startDate: nextDinnerDate(),
+        startHour: 18,
+        maxStops: 5,
+      });
+      if (route.stops.length === 0) {
+        return { summary: route.warnings.join('；'), complete: false };
+      }
+      const tripContextTripId = (ctx.constraints['tripId'] as string | undefined) ?? null;
+      if (!tripContextTripId) {
+        // 无关联行程：路线阶段降级为仅展示顺序（不写草案）。
+        ctx.degraded.push('未关联行程，路线草案未落库');
+        await appendEvent(deps, ctx.sessionId, ctx.commandId, null, 'trip.draft.created', {
+          stops: route.stops.length,
+          warnings: route.warnings,
+          persisted: false,
+        });
+        return { summary: `已排出 ${route.stops.length} 站顺序（未关联行程，未落草案）`, complete: false };
+      }
+      const { data: draftRow, error } = await deps.serviceClient.from('trip_drafts').insert({
+        trip_id: tripContextTripId,
+        session_id: ctx.sessionId,
+        source_task_id: null,
+        base_revision: typeof ctx.constraints['tripRevision'] === 'number'
+          ? Math.trunc(ctx.constraints['tripRevision'] as number)
+          : 1,
+        status: 'proposed',
+        items: toTripDraftItems(route.stops, ctx.recommendations),
+        warnings: route.warnings,
+        requires_captain_approval: true,
+      }).select('id').single();
+      if (error) {
+        throw new OrchestrationError('route_write_failed', error.message);
+      }
+      ctx.tripDraftId = String((draftRow as Record<string, unknown>)['id']);
+      await appendEvent(deps, ctx.sessionId, ctx.commandId, null, 'trip.draft.created', {
+        draftId: ctx.tripDraftId,
+        stops: route.stops.length,
+        warnings: route.warnings,
+      });
+      return { summary: `已生成 ${route.stops.length} 站路线草案，等待队长确认`, complete: true };
+    }, PHASE_TIMEOUT_MS.route);
+    if (await checkCancelled(deps, sessionId)) return;
+  }
+
+  // ── Phase F：Present 汇总落库 ────────────────────────────────────
   await runPhase(deps, ctx, 'result_coordinator', 'present', async () => {
     const { error } = await serviceClient.from('recommendation_sets').insert({
       session_id: sessionId,
@@ -178,20 +232,86 @@ export async function runOrchestration(
     return { summary: `已汇总 ${ctx.recommendations.length} 条推荐结果`, complete: true };
   }, PHASE_TIMEOUT_MS.present);
 
+  // ── 记忆提案：意图与忌口经队长确认后才写入长期记忆 ──────────────
+  await proposeMemoryFromIntent(deps, ctx);
+
   // ── 会话收尾 ─────────────────────────────────────────────────────
   const partial = ctx.degraded.length > 0;
-  await serviceClient.from('squad_sessions').update({
-    status: partial ? 'partially_completed' : 'completed',
+  const hasDraft = ctx.tripDraftId !== null;
+  await serviceClientNoop();
+  await deps.serviceClient.from('squad_sessions').update({
+    status: hasDraft ? 'awaiting_captain_decision' : (partial ? 'partially_completed' : 'completed'),
   }).eq('id', sessionId);
-  await serviceClient.from('captain_commands').update({
+  await deps.serviceClient.from('captain_commands').update({
     status: partial ? 'partially_completed' : 'completed',
   }).eq('id', commandId);
   await appendEvent(deps, sessionId, commandId, null, partial ? 'session.partially_completed' : 'session.completed', {
     summary: partial
       ? `部分完成：${ctx.degraded.join('；')}`
-      : `小队任务完成，共 ${ctx.recommendations.length} 条推荐`,
+      : hasDraft
+        ? `小队任务完成，${ctx.recommendations.length} 条推荐与路线草案待确认`
+        : `小队任务完成，共 ${ctx.recommendations.length} 条推荐`,
     degraded: ctx.degraded,
+    tripDraftId: ctx.tripDraftId,
   });
+}
+
+/**
+ * 从意图生成记忆提案（propose_only 语义）。
+ * 只有当指令中出现了可沉淀的偏好（忌口/预算/时段）时才提案，
+ * 队长接受后才进入 user_memories。
+ */
+async function proposeMemoryFromIntent(deps: OrchestrationDeps, ctx: OrchestrationContext): Promise<void> {
+  if (ctx.intent === null) return;
+  const proposals: Array<{ operation: string; memoryKey: string; value: Record<string, unknown>; confidence: number }> = [];
+  if (ctx.intent.avoid.length > 0) {
+    proposals.push({
+      operation: 'create',
+      memoryKey: 'avoid',
+      value: { items: ctx.intent.avoid, note: '来自队长指令' },
+      confidence: 0.9,
+    });
+  }
+  if (ctx.intent.budgetPerPersonMinor !== null) {
+    proposals.push({
+      operation: 'create',
+      memoryKey: 'budget_per_person',
+      value: { maxMinor: ctx.intent.budgetPerPersonMinor, note: '来自队长指令' },
+      confidence: 0.8,
+    });
+  }
+  if (proposals.length === 0) return;
+
+  for (const proposal of proposals) {
+    const { error } = await deps.serviceClient.from('memory_proposals').insert({
+      session_id: ctx.sessionId,
+      task_id: ctx.taskId,
+      user_id: ctx.userId,
+      operation: proposal.operation,
+      memory_key: proposal.memoryKey,
+      proposed_value: proposal.value,
+      confidence: proposal.confidence,
+      status: 'proposed',
+    });
+    if (error) {
+      console.error('memory proposal insert failed:', error.message);
+      continue;
+    }
+    await appendEvent(deps, ctx.sessionId, ctx.commandId, null, 'memory.proposed', {
+      memoryKey: proposal.memoryKey,
+      value: proposal.value,
+      confidence: proposal.confidence,
+    });
+  }
+}
+
+async function serviceClientNoop(): Promise<{ data: unknown; error: unknown }> {
+  return { data: null, error: null };
+}
+
+/** 路线默认锚定“今天/明天 18:00”晚餐（MVP：无会话内具体日期时使用）。 */
+function nextDinnerDate(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 /** 执行单阶段：建任务行 → running → 事件 → 成功/失败收敛，含一次性重试。 */

@@ -57,6 +57,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function requireUuid(value: unknown, code: string): void {
+  if (!isUuid(value)) throw new RpcError(400, code);
+}
+
 Deno.serve(async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
@@ -120,6 +124,96 @@ async function handle(
     if (!isUuid(body['sessionId'])) throw new RpcError(400, 'invalid_session_id');
     const { data, error } = await serviceClient.rpc('cancel_squad_session', {
       p_session_id: body['sessionId'],
+    }) as RpcResult;
+    if (error) throw rpcToHttp(error);
+    return json({ ok: true, ...(data as Record<string, unknown>) });
+  }
+  if (command === 'select_recommendation') {
+    requireUuid(body['sessionId'], 'invalid_session_id');
+    requireUuid(body['recommendationSetId'], 'invalid_recommendation_set_id');
+    const names = body['placeNames'];
+    if (!Array.isArray(names) || names.length === 0 || !names.every((n) => typeof n === 'string' && n.length > 0 && n.length <= 120)) {
+      throw new RpcError(400, 'invalid_place_names');
+    }
+    const { data, error } = await serviceClient.rpc('select_recommendation', {
+      p_session_id: body['sessionId'],
+      p_recommendation_set_id: body['recommendationSetId'],
+      p_place_names: names,
+    }) as RpcResult;
+    if (error) throw rpcToHttp(error);
+    return json({ ok: true, ...(data as Record<string, unknown>) });
+  }
+  if (command === 'reject_recommendation') {
+    requireUuid(body['sessionId'], 'invalid_session_id');
+    requireUuid(body['recommendationSetId'], 'invalid_recommendation_set_id');
+    const { data, error } = await serviceClient.rpc('reject_recommendation', {
+      p_session_id: body['sessionId'],
+      p_recommendation_set_id: body['recommendationSetId'],
+    }) as RpcResult;
+    if (error) throw rpcToHttp(error);
+    return json({ ok: true, ...(data as Record<string, unknown>) });
+  }
+  if (command === 'submit_recommendation_feedback') {
+    requireUuid(body['sessionId'], 'invalid_session_id');
+    requireUuid(body['recommendationSetId'], 'invalid_recommendation_set_id');
+    const placeName = body['placeName'];
+    const feedback = body['feedback'];
+    if (typeof placeName !== 'string' || placeName.trim().length === 0 || placeName.length > 120) {
+      throw new RpcError(400, 'invalid_place_name');
+    }
+    if (typeof feedback !== 'string' || !['liked', 'disliked', 'inaccurate'].includes(feedback)) {
+      throw new RpcError(400, 'invalid_feedback');
+    }
+    const { data, error } = await serviceClient.rpc('submit_recommendation_feedback', {
+      p_session_id: body['sessionId'],
+      p_recommendation_set_id: body['recommendationSetId'],
+      p_place_name: placeName,
+      p_feedback: feedback,
+    }) as RpcResult;
+    if (error) throw rpcToHttp(error);
+    return json({ ok: true, ...(data as Record<string, unknown>) });
+  }
+  if (command === 'memory_proposal_decision') {
+    requireUuid(body['proposalId'], 'invalid_proposal_id');
+    const decision = body['decision'];
+    if (typeof decision !== 'string' || !['accept', 'reject', 'edit'].includes(decision)) {
+      throw new RpcError(400, 'invalid_decision');
+    }
+    if (decision === 'edit' && (!isObject(body['editedValue']))) {
+      throw new RpcError(400, 'invalid_edited_value');
+    }
+    const { data, error } = await serviceClient.rpc('resolve_memory_proposal', {
+      p_proposal_id: body['proposalId'],
+      p_decision: decision,
+      p_edited_value: decision === 'edit' ? body['editedValue'] : null,
+    }) as RpcResult;
+    if (error) throw rpcToHttp(error);
+    return json({ ok: true, ...(data as Record<string, unknown>) });
+  }
+  if (command === 'resolve_decision_checkpoint') {
+    requireUuid(body['checkpointId'], 'invalid_checkpoint_id');
+    const optionId = body['selectedOptionId'];
+    if (typeof optionId !== 'string' || optionId.trim().length === 0 || optionId.length > 64) {
+      throw new RpcError(400, 'invalid_option_id');
+    }
+    const { data, error } = await serviceClient.rpc('resolve_decision_checkpoint', {
+      p_checkpoint_id: body['checkpointId'],
+      p_selected_option_id: optionId,
+    }) as RpcResult;
+    if (error) throw rpcToHttp(error);
+    return json({ ok: true, ...(data as Record<string, unknown>) });
+  }
+  if (command === 'apply_trip_draft') {
+    requireUuid(body['draftId'], 'invalid_draft_id');
+    requireUuid(body['idempotencyKey'], 'invalid_idempotency_key');
+    const expectedRevision = body['expectedRevision'];
+    if (typeof expectedRevision !== 'number' || !Number.isInteger(expectedRevision) || expectedRevision < 1) {
+      throw new RpcError(400, 'invalid_expected_revision');
+    }
+    const { data, error } = await serviceClient.rpc('apply_trip_draft', {
+      p_draft_id: body['draftId'],
+      p_expected_revision: expectedRevision,
+      p_idempotency_key: body['idempotencyKey'],
     }) as RpcResult;
     if (error) throw rpcToHttp(error);
     return json({ ok: true, ...(data as Record<string, unknown>) });
@@ -226,7 +320,10 @@ async function handleSubmitCommand(
 function rpcToHttp(error: { message: string }): RpcError {
   const message = error.message;
   if (/session not found/.test(message)) return new RpcError(404, 'session_not_found', message);
+  if (/not found/.test(message)) return new RpcError(404, 'resource_not_found', message);
   if (/terminal status/.test(message)) return new RpcError(409, 'session_terminal', message);
+  if (/revision conflict/.test(message)) return new RpcError(409, 'trip_revision_conflict', message);
+  if (/already (resolved|resolved|applied|selectable|rejectable)/.test(message)) return new RpcError(409, 'already_resolved', message);
   if (/reused with different/.test(message)) return new RpcError(409, 'idempotency_conflict', message);
   return new RpcError(400, 'rpc_rejected', message);
 }
