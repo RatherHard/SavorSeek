@@ -15,11 +15,11 @@ class AgentSession {
   final int projectionVersion;
 
   factory AgentSession.fromJson(Map<String, dynamic> json) => AgentSession(
-        id: '${json['id']}',
-        title: '${json['title'] ?? ''}',
-        status: '${json['status'] ?? 'idle'}',
-        projectionVersion: _int(json['projection_version']) ?? 1,
-      );
+    id: '${json['id']}',
+    title: '${json['title'] ?? ''}',
+    status: '${json['status'] ?? 'idle'}',
+    projectionVersion: _int(json['projection_version']) ?? 1,
+  );
 }
 
 @immutable
@@ -39,12 +39,12 @@ class AgentTask {
   final String? summary;
 
   factory AgentTask.fromJson(Map<String, dynamic> json) => AgentTask(
-        id: '${json['id']}',
-        role: '${json['role']}',
-        status: '${json['status']}',
-        progress: _int(json['progress']) ?? 0,
-        summary: json['user_summary'] as String?,
-      );
+    id: '${json['id']}',
+    role: '${json['role']}',
+    status: '${json['status']}',
+    progress: _int(json['progress']) ?? 0,
+    summary: json['user_summary'] as String?,
+  );
 }
 
 @immutable
@@ -59,7 +59,9 @@ class AgentRecommendationSet {
     return AgentRecommendationSet(
       id: '${json['id']}',
       items: rawItems is List
-          ? rawItems.whereType<Map>().map(Map<String, dynamic>.from).toList(growable: false)
+          ? List.unmodifiable(
+              rawItems.whereType<Map>().map(Map<String, dynamic>.from),
+            )
           : const [],
     );
   }
@@ -80,13 +82,38 @@ class AgentEvent {
   final Map<String, dynamic> payload;
 
   factory AgentEvent.fromJson(Map<String, dynamic> json) => AgentEvent(
-        id: '${json['eventId'] ?? json['id']}',
-        sequence: _int(json['sequence']) ?? 0,
-        type: '${json['eventType'] ?? json['event_type']}',
-        payload: json['payload'] is Map
-            ? Map<String, dynamic>.from(json['payload'] as Map)
-            : const {},
-      );
+    id: '${json['eventId'] ?? json['id']}',
+    sequence: _int(json['sequence']) ?? 0,
+    type: '${json['eventType'] ?? json['event_type']}',
+    payload: json['payload'] is Map
+        ? Map<String, dynamic>.from(json['payload'] as Map)
+        : const {},
+  );
+}
+
+@immutable
+class AgentEventBatch {
+  const AgentEventBatch({this.events = const [], this.nextSequence = 0})
+    : assert(nextSequence >= 0);
+
+  final List<AgentEvent> events;
+  final int nextSequence;
+
+  factory AgentEventBatch.fromJson(Map<String, dynamic> json) {
+    final rawEvents = json['events'];
+    final rawSequence = json['nextSequence'] ?? json['next_sequence'];
+    final parsedSequence = _int(rawSequence) ?? 0;
+    return AgentEventBatch(
+      events: rawEvents is List
+          ? List.unmodifiable(
+              rawEvents.whereType<Map>().map(
+                (item) => AgentEvent.fromJson(Map<String, dynamic>.from(item)),
+              ),
+            )
+          : const [],
+      nextSequence: parsedSequence < 0 ? 0 : parsedSequence,
+    );
+  }
 }
 
 @immutable
@@ -107,7 +134,8 @@ class AgentWorkspaceSnapshot {
   final Map<String, dynamic>? draft;
   final List<Map<String, dynamic>> decisions;
 
-  bool get awaitingDecision => decisions.any((item) => item['status'] == 'pending');
+  bool get awaitingDecision =>
+      decisions.any((item) => item['status'] == 'pending');
 
   factory AgentWorkspaceSnapshot.fromJson(Map<String, dynamic> json) {
     final rawSession = json['session'];
@@ -131,7 +159,10 @@ class AgentWorkspaceSnapshot {
   }
 
   static List<Map<String, dynamic>> _maps(Object? value) => value is List
-      ? value.whereType<Map>().map(Map<String, dynamic>.from).toList(growable: false)
+      ? value
+            .whereType<Map>()
+            .map(Map<String, dynamic>.from)
+            .toList(growable: false)
       : const [];
 }
 

@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:savorseek/app/supabase/supabase_bootstrap.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
@@ -27,6 +28,7 @@ class AppDependencies {
     this.mapConsent,
     this.routeService,
     this.agentRepository = const UnavailableAgentRepository(),
+    this.supabaseClient,
   });
 
   /// 由已完成的 Supabase 初始化结果组装真实依赖。
@@ -46,6 +48,7 @@ class AppDependencies {
         bootstrapMessage: result.message,
         mapConsent: consent,
         agentRepository: UnavailableAgentRepository(result.message),
+        supabaseClient: null,
       );
     }
     final auth = SupabaseAuthService();
@@ -59,6 +62,7 @@ class AppDependencies {
       mapConsent: consent,
       routeService: EdgeFunctionRouteService(auth: auth),
       agentRepository: SupabaseAgentRepository(auth: auth),
+      supabaseClient: Supabase.instance.client,
     );
   }
 
@@ -81,6 +85,7 @@ class AppDependencies {
   final TripRouteService? routeService;
 
   final AgentRepository agentRepository;
+  final SupabaseClient? supabaseClient;
 
   /// 初始化未成功时面向用户的原因；成功时为 null。
   final String? bootstrapMessage;
