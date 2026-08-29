@@ -73,7 +73,7 @@ function isInsideBounds(place: NormalizedPlace, bounds: SearchBounds): boolean {
 function matchesFilters(place: NormalizedPlace, options: MergeOptions): boolean {
   const filters = options.filters;
   if (filters.cuisine_tags.length > 0) {
-    const cuisines = new Set(place.cuisine_tags.map((tag) => tag.toLowerCase()));
+    const cuisines = new Set((place.cuisine_tags ?? []).map((tag) => tag.toLowerCase()));
     if (!filters.cuisine_tags.some((tag) => cuisines.has(tag.toLowerCase()))) return false;
   }
   if (filters.min_rating !== undefined &&
@@ -114,7 +114,7 @@ function completeness(place: NormalizedPlace): number {
     Number(place.rating !== null) +
     Number(place.price_level !== null) +
     Number(place.business_status !== null) +
-    Number(place.cuisine_tags.length > 0);
+    Number((place.cuisine_tags ?? []).length > 0);
 }
 
 function comparePlaces(
