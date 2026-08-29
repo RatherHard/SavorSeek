@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import 'package:savorseek/app/supabase/supabase_bootstrap.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
+import 'package:savorseek/features/agent/agent_repository.dart';
 import 'package:savorseek/features/explore/amap_consent.dart';
 import 'package:savorseek/features/places/favorite_repository.dart';
 import 'package:savorseek/features/places/place_repository.dart';
@@ -25,6 +26,7 @@ class AppDependencies {
     this.bootstrapMessage,
     this.mapConsent,
     this.routeService,
+    this.agentRepository = const UnavailableAgentRepository(),
   });
 
   /// 由已完成的 Supabase 初始化结果组装真实依赖。
@@ -43,6 +45,7 @@ class AppDependencies {
         favoriteRepository: UnavailableFavoriteRepository(result.message),
         bootstrapMessage: result.message,
         mapConsent: consent,
+        agentRepository: UnavailableAgentRepository(result.message),
       );
     }
     final auth = SupabaseAuthService();
@@ -55,6 +58,7 @@ class AppDependencies {
       scheduler: AddPlaceToTrip(tripRepository),
       mapConsent: consent,
       routeService: EdgeFunctionRouteService(auth: auth),
+      agentRepository: SupabaseAgentRepository(auth: auth),
     );
   }
 
@@ -75,6 +79,8 @@ class AppDependencies {
 
   /// 真实路网路线来源。为空时行程地图退化为直线连接。
   final TripRouteService? routeService;
+
+  final AgentRepository agentRepository;
 
   /// 初始化未成功时面向用户的原因；成功时为 null。
   final String? bootstrapMessage;
