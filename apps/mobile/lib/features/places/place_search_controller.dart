@@ -76,10 +76,12 @@ final class PlaceSearchEmpty extends PlaceSearchState {
   const PlaceSearchEmpty(
     this.keywords, {
     this.source = PlaceSearchSource.keyword,
+    this.hasPreviousResult = false,
   });
 
   final String keywords;
   final PlaceSearchSource source;
+  final bool hasPreviousResult;
 }
 
 final class PlaceSearchFailed extends PlaceSearchState {
@@ -292,7 +294,11 @@ class PlaceSearchController extends ChangeNotifier {
       _viewportResult = result;
       _setState(
         result.isEmpty
-            ? PlaceSearchEmpty(trimmed, source: PlaceSearchSource.viewport)
+            ? PlaceSearchEmpty(
+                trimmed,
+                source: PlaceSearchSource.viewport,
+                hasPreviousResult: previous != null && !previous.isEmpty,
+              )
             : PlaceSearchLoaded(
                 keywords: trimmed,
                 result: result,

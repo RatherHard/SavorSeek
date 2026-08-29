@@ -19,7 +19,6 @@ import 'package:savorseek/features/places/place_detail_sheet.dart';
 import 'package:savorseek/features/places/place_models.dart';
 import 'package:savorseek/features/places/place_repository.dart';
 import 'package:savorseek/features/places/place_search_controller.dart';
-import 'package:savorseek/features/places/place_search_query.dart';
 import 'package:savorseek/features/trip/add_place_to_trip.dart';
 import 'package:savorseek/features/trip/schedule_picker_sheet.dart';
 
@@ -387,10 +386,19 @@ class _ExplorePageState extends State<ExplorePage> {
   /// 视野无效、未登录是不同的成因，对应的下一步动作也不同。
   Widget? _statusNotice(PlaceSearchController search) {
     return switch (search.state) {
-      PlaceSearchEmpty(:final keywords) => _MapNotice(
-        icon: Icons.search_off,
-        message: '没有找到与「$keywords」相符的地点。换个说法或扩大范围再试试。',
-      ),
+      PlaceSearchEmpty(
+        :final keywords,
+        :final source,
+        :final hasPreviousResult,
+      ) =>
+        _MapNotice(
+          icon: Icons.search_off,
+          message: source == PlaceSearchSource.viewport
+              ? (hasPreviousResult
+                    ? '当前地图范围暂无新的地点，仍保留上一批结果。'
+                    : '当前地图范围暂无符合条件的地点。')
+              : '没有找到与「$keywords」相符的地点。换个说法或扩大范围再试试。',
+        ),
       PlaceSearchLoaded(:final result) when result.isPartial => _MapNotice(
         icon: Icons.warning_amber_outlined,
         message: '部分地点已加载，部分区域暂不可用。',
