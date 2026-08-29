@@ -5,6 +5,7 @@ import 'package:savorseek/app/navigation/app_destination.dart';
 import 'package:savorseek/app/navigation/primary_nav_bar.dart';
 import 'package:savorseek/app/theme/design_tokens.dart';
 import 'package:savorseek/features/explore/explore_page.dart';
+import 'package:savorseek/features/agent/agent_controller.dart';
 import 'package:savorseek/features/mine/mine_page.dart';
 import 'package:savorseek/features/places/favorites_controller.dart';
 import 'package:savorseek/features/trip/trip_list_page.dart';
@@ -36,10 +37,14 @@ class _AppShellState extends State<AppShell> {
     auth: widget.dependencies.auth,
     repository: widget.dependencies.favoriteRepository,
   )..loadFavoritePlaceIds();
+  late final AgentController _agent = AgentController(
+    repository: widget.dependencies.agentRepository,
+  );
 
   @override
   void dispose() {
     _favorites.dispose();
+    _agent.dispose();
     super.dispose();
   }
 
@@ -67,6 +72,7 @@ class _AppShellState extends State<AppShell> {
               auth: widget.dependencies.auth,
               scheduler: widget.dependencies.scheduler,
               consent: widget.dependencies.mapConsent,
+              agentController: _agent,
             ),
             TripListPage(
               repository: widget.dependencies.tripRepository,
