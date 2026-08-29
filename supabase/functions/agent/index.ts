@@ -258,6 +258,28 @@ async function handle(
       p_selected_option_id: optionId,
     }) as RpcResult;
     if (error) throw rpcToHttp(error);
+    if (optionId === 'apply') {
+      const expectedRevision = body['expectedRevision'];
+      const idempotencyKey = body['idempotencyKey'];
+      requireUuid(idempotencyKey, 'invalid_idempotency_key');
+      if (typeof expectedRevision !== 'number' || !Number.isInteger(expectedRevision) || expectedRevision < 1) {
+        throw new RpcError(400, 'invalid_expected_revision');
+      }
+      const checkpoint = await userClient.from('decision_checkpoints')
+        .select('affected_resource_refs')
+        .eq('id', body['checkpointId'])
+        .single();
+      const refs = checkpoint.data?.['affected_resource_refs'];
+      const draftId = Array.isArray(refs) && typeof refs[1] === 'string' ? refs[1] : null;
+      requireUuid(draftId, 'invalid_draft_reference');
+      const applied = await userClient.rpc('apply_trip_draft', {
+        p_draft_id: draftId,
+        p_expected_revision: expectedRevision,
+        p_idempotency_key: idempotencyKey,
+      }) as RpcResult;
+      if (applied.error) throw rpcToHttp(applied.error);
+      return json({ ok: true, ...(data as Record<string, unknown>), applied: applied.data });
+    }
     return json({ ok: true, ...(data as Record<string, unknown>) });
   }
   if (command === 'apply_trip_draft') {
