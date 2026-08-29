@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:savorseek/features/places/place_models.dart';
 import 'package:savorseek/features/places/place_repository.dart';
 import 'package:savorseek/features/places/place_search_controller.dart';
+import 'package:savorseek/features/places/place_search_query.dart';
 
 /// 手写 fake 而非 mock：检索仓库只有两个方法，且这里需要控制「响应何时到达」
 /// 来验证乱序响应，用 Completer 比配置 mock 的返回顺序清晰得多。
@@ -23,6 +24,14 @@ class FakePlaceRepository implements PlaceRepository {
 
   /// 非空时，检索会挂起直到测试显式完成它。
   Completer<void>? gate;
+
+  @override
+  Future<PlaceSearchResult> search(PlaceSearchQuery query) async {
+    if (gate != null) await gate!.future;
+    final failure = error;
+    if (failure != null) throw failure;
+    return result;
+  }
 
   @override
   Future<PlaceSearchResult> searchByKeywords({
@@ -103,6 +112,30 @@ void main() {
     final state = controller.state;
     expect(state, isA<PlaceSearchLoaded>());
     expect((state as PlaceSearchLoaded).source, PlaceSearchSource.viewport);
+  });
+
+  test('视野结果优先作为地图候选但不替换关键词展示结果', () async {
+    final keywordPlace = buildPlace(id: 'keyword');
+    final viewportPlace = buildPlace(id: 'viewport', name: '视野地点');
+    repository.result = PlaceSearchResult(
+      places: [keywordPlace],
+      fromCache: false,
+    );
+    await controller.searchByKeywords('烧烤');
+
+    repository.result = PlaceSearchResult(
+      places: [viewportPlace],
+      fromCache: false,
+    );
+    await controller.searchAround(
+      latitude: 38.914,
+      longitude: 121.615,
+      radiusMeters: 3000,
+      queryKey: 'viewport-1',
+    );
+
+    expect(controller.visiblePlaces.single.id, 'keyword');
+    expect(controller.mapPlaces.single.id, 'viewport');
   });
 
   test('相同视野 query key 不重复请求', () async {

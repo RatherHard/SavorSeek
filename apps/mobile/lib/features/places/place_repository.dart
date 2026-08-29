@@ -6,6 +6,7 @@ import 'package:savorseek/app/config/supabase_config.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 
 import 'place_models.dart';
+import 'place_search_query.dart';
 
 /// 地点检索的失败原因。
 ///
@@ -62,6 +63,9 @@ abstract interface class PlaceRepository {
     int radiusMeters = 3000,
     String? keywords,
   });
+
+  Future<PlaceSearchResult> search(PlaceSearchQuery query) =>
+      throw UnsupportedError('Structured place search is not implemented.');
 }
 
 /// 后端不可用时的占位实现，让「未注入参数」与「检索失败」走同一条 UI 分支。
@@ -83,6 +87,9 @@ class UnavailablePlaceRepository implements PlaceRepository {
     int radiusMeters = 3000,
     String? keywords,
   }) => _fail();
+
+  @override
+  Future<PlaceSearchResult> search(PlaceSearchQuery query) => _fail();
 
   Future<PlaceSearchResult> _fail() async {
     throw PlaceSearchException(
@@ -142,6 +149,10 @@ class SupabasePlaceRepository implements PlaceRepository {
     });
   }
 
+  @override
+  Future<PlaceSearchResult> search(PlaceSearchQuery query) =>
+      _invoke(query.toJson());
+
   Future<PlaceSearchResult> _invoke(Map<String, dynamic> body) async {
     _requireSession();
     try {
@@ -196,12 +207,19 @@ PlaceSearchResult parsePlaceSearchResponse(Object? data) {
             .toList(growable: false)
       : const <Place>[];
   final fetchedAt = data['fetched_at'];
+  final failedTiles = data['failed_tiles'];
   return PlaceSearchResult(
     places: places,
     fromCache: data['from_cache'] == true,
     fetchedAt: fetchedAt is String
         ? DateTime.tryParse(fetchedAt)?.toLocal()
         : null,
+    nextCursor: data['next_cursor'] as String?,
+    hasMore: data['has_more'] == true,
+    isPartial: data['partial'] == true,
+    failedTiles: failedTiles is List
+        ? List.unmodifiable(failedTiles.whereType<String>())
+        : const [],
   );
 }
 

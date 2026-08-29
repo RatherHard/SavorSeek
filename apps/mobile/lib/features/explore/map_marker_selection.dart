@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:savorseek/features/places/place_models.dart';
 
-const _selectionVersion = 'marker-selection-v2';
+const _selectionVersion = 'marker-selection-v3';
 const _earthMetersPerDegreeLatitude = 110540.0;
 const _earthMetersPerDegreeLongitude = 111320.0;
 
@@ -148,35 +148,79 @@ MapMarkerSelectionResult selectMapMarkers({
       .where((place) => _isInEstimatedViewport(place, context, config))
       .toList();
   final target = _targetCount(context, config, visible.length);
-  final cellSize = config.markerFootprintPx + config.markerGapPx;
-  final selected = <Place>[];
-  final occupied = <String, Place>{};
-  final deferred = <Place>[];
+  final selected = _selectAcrossViewport(
+    visible: visible,
+    target: target,
+    context: context,
+    config: config,
+  );
 
+  return MapMarkerSelectionResult(
+    places: List.unmodifiable(selected),
+    targetCount: target,
+    eligibleCount: normalized.length,
+    selectionKey: key,
+    isValid: true,
+  );
+}
+
+List<Place> _selectAcrossViewport({
+  required List<Place> visible,
+  required int target,
+  required MapMarkerSelectionContext context,
+  required MapMarkerSelectionConfig config,
+}) {
+  if (target == 0) return const <Place>[];
+
+  final grid = _buildSelectionGrid(target, context, config);
+  final byCell = <String, List<Place>>{};
   for (final place in visible) {
-    if (selected.length >= target) break;
     final point = _project(place, context);
-    final cell =
-        '${(point.$1 / cellSize).floor()}:${(point.$2 / cellSize).floor()}';
-    if (occupied.containsKey(cell) ||
-        _tooClose(point, selected, context, config)) {
-      deferred.add(place);
+    final cell = _cellFor(point, context, grid);
+    (byCell[cell] ??= <Place>[]).add(place);
+  }
+
+  final cells = byCell.keys.toList()..sort(_compareCellKeys);
+  final selected = <Place>[];
+  final selectedIds = <String>{};
+  for (final cell in cells) {
+    if (selected.length >= target) break;
+    final candidates = byCell[cell]!..sort((a, b) => _compare(a, b, context));
+    Place? place;
+    for (final candidate in candidates) {
+      if (!_tooClose(_project(candidate, context), selected, context, config)) {
+        place = candidate;
+        break;
+      }
+    }
+    if (place == null) continue;
+    selected.add(place);
+    selectedIds.add(place.id.trim());
+  }
+
+  final remaining =
+      visible.where((place) => !selectedIds.contains(place.id.trim())).toList()
+        ..sort((a, b) => _compare(a, b, context));
+  for (final place in remaining) {
+    if (selected.length >= target) break;
+    if (_tooClose(_project(place, context), selected, context, config)) {
       continue;
     }
-    occupied[cell] = place;
     selected.add(place);
   }
 
-  // 目标数量是上限；若第一轮的可读间距不足，不直接堆叠标记。
-  // 第二轮只放宽到较小的安全间距，避免密集区域永远只剩一个，同时避免
-  // 相同坐标的标记完全重叠而互相遮挡、无法点击。
   if (selected.length < target) {
-    final fallbackSpacing = math.max(8.0, cellSize * 0.2);
-    for (final place in deferred) {
+    final fallbackSpacing = math.max(
+      8.0,
+      (config.markerFootprintPx + config.markerGapPx) * 0.2,
+    );
+    for (final place in remaining) {
       if (selected.length >= target) break;
-      final point = _project(place, context);
+      if (selected.any((selectedPlace) => selectedPlace.id == place.id)) {
+        continue;
+      }
       if (_tooClose(
-        point,
+        _project(place, context),
         selected,
         context,
         config,
@@ -187,14 +231,45 @@ MapMarkerSelectionResult selectMapMarkers({
       selected.add(place);
     }
   }
+  return selected;
+}
 
-  return MapMarkerSelectionResult(
-    places: List.unmodifiable(selected),
-    targetCount: target,
-    eligibleCount: normalized.length,
-    selectionKey: key,
-    isValid: true,
+({int columns, int rows}) _buildSelectionGrid(
+  int target,
+  MapMarkerSelectionContext context,
+  MapMarkerSelectionConfig config,
+) {
+  final cellSize = config.markerFootprintPx + config.markerGapPx;
+  final maxColumns = math.max(1, (context.width / cellSize).floor());
+  final maxRows = math.max(1, (context.height / cellSize).floor());
+  final aspect = context.width / context.height;
+  final columns = math.min(
+    maxColumns,
+    math.max(1, math.sqrt(target * aspect).round()),
   );
+  final rows = math.min(maxRows, math.max(1, (target / columns).ceil()));
+  return (columns: columns, rows: rows);
+}
+
+String _cellFor(
+  (double, double) point,
+  MapMarkerSelectionContext context,
+  ({int columns, int rows}) grid,
+) {
+  final x = ((point.$1 + context.width / 2) / context.width * grid.columns)
+      .floor()
+      .clamp(0, grid.columns - 1);
+  final y = ((point.$2 + context.height / 2) / context.height * grid.rows)
+      .floor()
+      .clamp(0, grid.rows - 1);
+  return '$y:$x';
+}
+
+int _compareCellKeys(String a, String b) {
+  final aParts = a.split(':').map(int.parse).toList();
+  final bParts = b.split(':').map(int.parse).toList();
+  final row = aParts[0].compareTo(bParts[0]);
+  return row == 0 ? aParts[1].compareTo(bParts[1]) : row;
 }
 
 bool _isEligible(Place place) =>
@@ -223,7 +298,15 @@ int _compare(Place a, Place b, MapMarkerSelectionContext context) {
   if (longitude != 0) return longitude;
   final latitude = a.latitude!.compareTo(b.latitude!);
   if (latitude != 0) return latitude;
-  return a.name.trim().compareTo(b.name.trim());
+  final name = a.name.trim().compareTo(b.name.trim());
+  if (name != 0) return name;
+  final category = (a.category ?? '').trim().compareTo(
+    (b.category ?? '').trim(),
+  );
+  if (category != 0) return category;
+  final address = (a.address ?? '').trim().compareTo((b.address ?? '').trim());
+  if (address != 0) return address;
+  return a.fetchedAt.compareTo(b.fetchedAt);
 }
 
 double _ratingPriority(Place place) {
@@ -298,10 +381,7 @@ int _targetCount(
     (zoomFactor + radiusFactor + scaleFactor) / 3,
   );
   final capacity = (columns * rows * density).floor();
-  return math.min(
-    eligibleCount,
-    math.min(config.maxMarkers, math.max(config.minMarkers, capacity)),
-  );
+  return math.min(eligibleCount, math.min(config.maxMarkers, capacity));
 }
 
 bool _isValidContext(MapMarkerSelectionContext context) =>

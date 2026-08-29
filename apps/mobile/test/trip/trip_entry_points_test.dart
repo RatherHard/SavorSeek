@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:savorseek/features/places/place_models.dart';
 import 'package:savorseek/features/places/place_repository.dart';
+import 'package:savorseek/features/places/place_search_query.dart';
 import 'package:savorseek/features/trip/trip_mapper.dart';
 import 'package:savorseek/features/trip/trip_detail_page.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
@@ -348,6 +349,10 @@ class _FakePlaceRepository implements PlaceRepository {
       fromCache: false,
     );
   }
+
+  @override
+  Future<PlaceSearchResult> search(PlaceSearchQuery query) =>
+      searchByKeywords(keywords: query.keywords ?? '');
 
   @override
   Future<PlaceSearchResult> searchAround({

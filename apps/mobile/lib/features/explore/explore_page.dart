@@ -435,7 +435,7 @@ class _ExplorePageState extends State<ExplorePage> {
         ? currentState.queryKey ?? currentState.keywords
         : 'search';
     final selection = selectMapMarkers(
-      places: _search?.visiblePlaces ?? const <Place>[],
+      places: _search?.mapPlaces ?? const <Place>[],
       context: MapMarkerSelectionContext(
         centerLatitude: query.center.latitude,
         centerLongitude: query.center.longitude,
@@ -480,7 +480,7 @@ class _ExplorePageState extends State<ExplorePage> {
             if (place.hasValidRating) '评分 ${place.rating!.toStringAsFixed(1)}',
           ].join(' · '),
         ),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueOrange),
+        icon: BitmapDescriptor.defaultMarker,
         zIndex: place.hasValidRating ? place.rating! : 0,
         onTap: _onMarkerTapped,
       );
@@ -499,7 +499,6 @@ class _ExplorePageState extends State<ExplorePage> {
   }
 }
 
-/// 检索进行中的浮标。
 class _SearchingChip extends StatelessWidget {
   const _SearchingChip();
 
