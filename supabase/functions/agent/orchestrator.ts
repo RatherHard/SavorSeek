@@ -39,6 +39,16 @@ interface OrchestrationDeps {
   userId: string;
 }
 
+interface PhaseResult {
+  summary: string;
+  complete: boolean;
+  artifact?: {
+    type: string;
+    payload: Record<string, unknown>;
+    confidence?: number | null;
+  };
+}
+
 export async function runOrchestration(
   serviceClient: SupabaseClient,
   userId: string,
@@ -65,6 +75,7 @@ export async function runOrchestration(
     userId,
     rawText: String(commandRow['raw_text'] ?? ''),
     taskType: String(commandRow['task_type'] ?? 'discover_places'),
+    context: (commandRow['context'] ?? {}) as Record<string, unknown>,
     constraints: (commandRow['constraints_json'] ?? {}) as Record<string, unknown>,
     intent: null,
     memoryNotes: [],
@@ -73,6 +84,7 @@ export async function runOrchestration(
     recommendations: [],
     routePath: null,
     tripDraftId: null,
+    pendingDecision: false,
     degraded: [],
   };
 
@@ -98,7 +110,7 @@ export async function runOrchestration(
         budgetPerPersonMinor: ctx.intent.budgetPerPersonMinor,
         avoid: ctx.intent.avoid,
       });
-      return { summary: intentSummary(ctx.intent), complete: true };
+      return { summary: intentSummary(ctx.intent), complete: true, artifact: { type: 'intent', payload: { intent: ctx.intent }, confidence: 1 } };
     }, PHASE_TIMEOUT_MS.intent),
     runPhase(deps, ctx, 'preference_advisor', 'memory', async () => {
       const signals = await readMemorySignals(serviceClient, userId);
@@ -108,6 +120,7 @@ export async function runOrchestration(
           ? `读取到 ${signals.favoriteCount} 条收藏偏好`
           : '暂无历史偏好，使用显式条件',
         complete: true,
+        artifact: { type: 'memory_context', payload: { favoriteCount: signals.favoriteCount, favoriteNames: signals.favoriteNames } },
       };
     }, PHASE_TIMEOUT_MS.memory),
   ]);
@@ -125,7 +138,7 @@ export async function runOrchestration(
     if (ctx.candidates.length === 0) {
       return { summary: '当前区域没有找到候选地点', complete: false };
     }
-    return { summary: `找到 ${ctx.candidates.length} 个候选地点`, complete: true };
+    return { summary: `找到 ${ctx.candidates.length} 个候选地点`, complete: true, artifact: { type: 'place_candidates', payload: { candidates: ctx.candidates } } };
   }, PHASE_TIMEOUT_MS.map);
   if (await checkCancelled(deps, sessionId)) return;
 
@@ -142,6 +155,7 @@ export async function runOrchestration(
     return {
       summary: `核验完成，${usable}/${ctx.verified.length} 个候选可用`,
       complete: usable > 0,
+      artifact: { type: 'fact_check', payload: { places: ctx.verified } },
     };
   }, PHASE_TIMEOUT_MS.fact);
   if (await checkCancelled(deps, sessionId)) return;
@@ -163,7 +177,7 @@ export async function runOrchestration(
       centerLongitude: viewport?.longitude ?? null,
       resultLimit,
     });
-    return { summary: `已生成 ${ctx.recommendations.length} 条推荐`, complete: true };
+    return { summary: `已生成 ${ctx.recommendations.length} 条推荐`, complete: true, artifact: { type: 'recommendation_set', payload: { items: ctx.recommendations } } };
   }, PHASE_TIMEOUT_MS.recommend);
   if (await checkCancelled(deps, sessionId)) return;
 
@@ -181,7 +195,7 @@ export async function runOrchestration(
       if (route.stops.length === 0) {
         return { summary: route.warnings.join('；'), complete: false };
       }
-      const tripContextTripId = (ctx.constraints['tripId'] as string | undefined) ?? null;
+      const tripContextTripId = (ctx.context['tripId'] as string | undefined) ?? null;
       if (!tripContextTripId) {
         // 无关联行程：路线阶段降级为仅展示顺序（不写草案）。
         ctx.degraded.push('未关联行程，路线草案未落库');
@@ -196,8 +210,8 @@ export async function runOrchestration(
         trip_id: tripContextTripId,
         session_id: ctx.sessionId,
         source_task_id: null,
-        base_revision: typeof ctx.constraints['tripRevision'] === 'number'
-          ? Math.trunc(ctx.constraints['tripRevision'] as number)
+        base_revision: typeof ctx.context['tripRevision'] === 'number'
+          ? Math.trunc(ctx.context['tripRevision'] as number)
           : 1,
         status: 'proposed',
         items: toTripDraftItems(route.stops, ctx.recommendations),
@@ -208,18 +222,61 @@ export async function runOrchestration(
         throw new OrchestrationError('route_write_failed', error.message);
       }
       ctx.tripDraftId = String((draftRow as Record<string, unknown>)['id']);
+      const { data: checkpoint, error: checkpointError } = await deps.serviceClient
+        .from('decision_checkpoints')
+        .insert({
+          session_id: ctx.sessionId,
+          kind: 'apply_trip_draft',
+          question: '路线草案需要更新当前行程，是否应用？',
+          options: [
+            { id: 'apply', label: '应用草案', impact: '更新当前行程版本' },
+            { id: 'keep_locked', label: '保留现有安排', impact: '仅查看冲突' },
+            { id: 'cancel', label: '取消本次调整', impact: '不修改行程' },
+          ],
+          affected_resource_refs: [tripContextTripId, ctx.tripDraftId],
+          status: 'pending',
+        })
+        .select('id')
+        .single();
+      if (checkpointError) throw new OrchestrationError('checkpoint_write_failed', checkpointError.message);
+      ctx.pendingDecision = true;
       await appendEvent(deps, ctx.sessionId, ctx.commandId, null, 'trip.draft.created', {
         draftId: ctx.tripDraftId,
         stops: route.stops.length,
         warnings: route.warnings,
       });
-      return { summary: `已生成 ${route.stops.length} 站路线草案，等待队长确认`, complete: true };
+      await appendEvent(deps, ctx.sessionId, ctx.commandId, null, 'decision.required', {
+        checkpointId: (checkpoint as Record<string, unknown>)['id'],
+        draftId: ctx.tripDraftId,
+      });
+      return { summary: `已生成 ${route.stops.length} 站路线草案，等待队长确认`, complete: true, artifact: { type: 'trip_draft', payload: { draftId: ctx.tripDraftId, stops: route.stops } } };
     }, PHASE_TIMEOUT_MS.route);
     if (await checkCancelled(deps, sessionId)) return;
   }
 
   // ── Phase F：Present 汇总落库 ────────────────────────────────────
   await runPhase(deps, ctx, 'result_coordinator', 'present', async () => {
+    const artifact = {
+      session_id: ctx.sessionId,
+      task_id: ctx.taskId,
+      schema_version: 1,
+      artifact_type: 'recommendation_set',
+      producer: 'result_coordinator',
+      payload: { items: ctx.recommendations, warnings: ctx.degraded },
+      confidence: ctx.recommendations.length > 0
+        ? ctx.recommendations.reduce((sum, item) => sum + item.confidence, 0) / ctx.recommendations.length
+        : null,
+      warnings: ctx.degraded,
+      requires_captain_approval: false,
+      is_captain_visible: true,
+    };
+    const { data: storedArtifact, error: storedArtifactError } = await deps.serviceClient
+      .from('agent_artifacts').insert(artifact).select('id').single();
+    if (storedArtifactError) throw new OrchestrationError('artifact_write_failed', storedArtifactError.message);
+    await appendEvent(deps, ctx.sessionId, ctx.commandId, ctx.taskId, 'artifact.created', {
+      artifactId: (storedArtifact as Record<string, unknown>)['id'],
+      artifactType: 'recommendation_set',
+    });
     const { error } = await serviceClient.from('recommendation_sets').insert({
       session_id: sessionId,
       task_id: taskId,
@@ -238,9 +295,8 @@ export async function runOrchestration(
   // ── 会话收尾 ─────────────────────────────────────────────────────
   const partial = ctx.degraded.length > 0;
   const hasDraft = ctx.tripDraftId !== null;
-  await serviceClientNoop();
   await deps.serviceClient.from('squad_sessions').update({
-    status: hasDraft ? 'awaiting_captain_decision' : (partial ? 'partially_completed' : 'completed'),
+    status: ctx.pendingDecision ? 'awaiting_captain_decision' : (partial ? 'partially_completed' : 'completed'),
   }).eq('id', sessionId);
   await deps.serviceClient.from('captain_commands').update({
     status: partial ? 'partially_completed' : 'completed',
@@ -305,10 +361,6 @@ async function proposeMemoryFromIntent(deps: OrchestrationDeps, ctx: Orchestrati
   }
 }
 
-async function serviceClientNoop(): Promise<{ data: unknown; error: unknown }> {
-  return { data: null, error: null };
-}
-
 /** 路线默认锚定“今天/明天 18:00”晚餐（MVP：无会话内具体日期时使用）。 */
 function nextDinnerDate(): string {
   return new Date().toISOString().slice(0, 10);
@@ -320,7 +372,7 @@ async function runPhase(
   ctx: OrchestrationContext,
   role: AgentRole,
   phaseName: string,
-  work: () => Promise<{ summary: string; complete: boolean }>,
+  work: () => Promise<PhaseResult>,
   timeoutMs: number,
 ): Promise<void> {
   const taskId = await createTask(deps, ctx.sessionId, ctx.commandId, role);
@@ -328,8 +380,31 @@ async function runPhase(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const { summary, complete } = await work();
+      const { summary, complete, artifact } = await work();
       clearTimeout(timer);
+      if (artifact) {
+        const { data: artifactRow, error: artifactError } = await deps.serviceClient
+          .from('agent_artifacts')
+          .insert({
+            session_id: ctx.sessionId,
+            task_id: taskId,
+            schema_version: 1,
+            artifact_type: artifact.type,
+            producer: role,
+            payload: artifact.payload,
+            confidence: artifact.confidence ?? null,
+            warnings: [],
+            requires_captain_approval: false,
+            is_captain_visible: true,
+          })
+          .select('id')
+          .single();
+        if (artifactError) throw new OrchestrationError('artifact_write_failed', artifactError.message);
+        await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, 'artifact.created', {
+          artifactId: (artifactRow as Record<string, unknown>)['id'],
+          artifactType: artifact.type,
+        });
+      }
       await deps.serviceClient.from('agent_tasks').update({
         status: complete ? 'succeeded' : 'partial',
         user_summary: summary,
@@ -348,6 +423,7 @@ async function runPhase(
 
   await deps.serviceClient.from('agent_tasks').update({ status: 'running', started_at: new Date().toISOString() }).eq('id', taskId);
   await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, 'task.started', { role, phase: phaseName });
+  await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, 'task.progressed', { role, phase: phaseName, progress: 10 });
 
   const firstOk = await attempt();
   if (firstOk) return;

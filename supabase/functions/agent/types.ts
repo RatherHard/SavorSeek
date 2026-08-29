@@ -104,6 +104,7 @@ export interface OrchestrationContext {
   userId: string;
   rawText: string;
   taskType: string;
+  context: Record<string, unknown>;
   constraints: Record<string, unknown>;
   intent: ParsedIntent | null;
   memoryNotes: string[];
@@ -112,6 +113,7 @@ export interface OrchestrationContext {
   recommendations: RecommendationItem[];
   routePath: Array<{ latitude: number; longitude: number }> | null;
   tripDraftId: string | null;
+  pendingDecision: boolean;
   degraded: string[];
 }
 

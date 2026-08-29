@@ -100,7 +100,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   try {
-    return await handle(serviceClient, userId, body);
+    return await handle(userClient, serviceClient, userId, body);
   } catch (error) {
     if (error instanceof RpcError) {
       return json({ error: error.code, detail: error.message }, error.status);
@@ -111,6 +111,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 });
 
 async function handle(
+  userClient: SupabaseClient,
   serviceClient: SupabaseClient,
   userId: string,
   body: Record<string, unknown>,
@@ -118,11 +119,11 @@ async function handle(
   const command = body['command'];
 
   if (command === 'submit_command') {
-    return handleSubmitCommand(serviceClient, userId, body);
+    return handleSubmitCommand(userClient, serviceClient, userId, body);
   }
   if (command === 'cancel_session') {
     if (!isUuid(body['sessionId'])) throw new RpcError(400, 'invalid_session_id');
-    const { data, error } = await serviceClient.rpc('cancel_squad_session', {
+    const { data, error } = await userClient.rpc('cancel_squad_session', {
       p_session_id: body['sessionId'],
     }) as RpcResult;
     if (error) throw rpcToHttp(error);
@@ -135,7 +136,7 @@ async function handle(
     if (!Array.isArray(names) || names.length === 0 || !names.every((n) => typeof n === 'string' && n.length > 0 && n.length <= 120)) {
       throw new RpcError(400, 'invalid_place_names');
     }
-    const { data, error } = await serviceClient.rpc('select_recommendation', {
+    const { data, error } = await userClient.rpc('select_recommendation', {
       p_session_id: body['sessionId'],
       p_recommendation_set_id: body['recommendationSetId'],
       p_place_names: names,
@@ -146,7 +147,7 @@ async function handle(
   if (command === 'reject_recommendation') {
     requireUuid(body['sessionId'], 'invalid_session_id');
     requireUuid(body['recommendationSetId'], 'invalid_recommendation_set_id');
-    const { data, error } = await serviceClient.rpc('reject_recommendation', {
+    const { data, error } = await userClient.rpc('reject_recommendation', {
       p_session_id: body['sessionId'],
       p_recommendation_set_id: body['recommendationSetId'],
     }) as RpcResult;
@@ -164,7 +165,7 @@ async function handle(
     if (typeof feedback !== 'string' || !['liked', 'disliked', 'inaccurate'].includes(feedback)) {
       throw new RpcError(400, 'invalid_feedback');
     }
-    const { data, error } = await serviceClient.rpc('submit_recommendation_feedback', {
+    const { data, error } = await userClient.rpc('submit_recommendation_feedback', {
       p_session_id: body['sessionId'],
       p_recommendation_set_id: body['recommendationSetId'],
       p_place_name: placeName,
@@ -182,7 +183,7 @@ async function handle(
     if (decision === 'edit' && (!isObject(body['editedValue']))) {
       throw new RpcError(400, 'invalid_edited_value');
     }
-    const { data, error } = await serviceClient.rpc('resolve_memory_proposal', {
+    const { data, error } = await userClient.rpc('resolve_memory_proposal', {
       p_proposal_id: body['proposalId'],
       p_decision: decision,
       p_edited_value: decision === 'edit' ? body['editedValue'] : null,
@@ -196,7 +197,7 @@ async function handle(
     if (typeof optionId !== 'string' || optionId.trim().length === 0 || optionId.length > 64) {
       throw new RpcError(400, 'invalid_option_id');
     }
-    const { data, error } = await serviceClient.rpc('resolve_decision_checkpoint', {
+    const { data, error } = await userClient.rpc('resolve_decision_checkpoint', {
       p_checkpoint_id: body['checkpointId'],
       p_selected_option_id: optionId,
     }) as RpcResult;
@@ -210,7 +211,7 @@ async function handle(
     if (typeof expectedRevision !== 'number' || !Number.isInteger(expectedRevision) || expectedRevision < 1) {
       throw new RpcError(400, 'invalid_expected_revision');
     }
-    const { data, error } = await serviceClient.rpc('apply_trip_draft', {
+    const { data, error } = await userClient.rpc('apply_trip_draft', {
       p_draft_id: body['draftId'],
       p_expected_revision: expectedRevision,
       p_idempotency_key: body['idempotencyKey'],
@@ -220,7 +221,7 @@ async function handle(
   }
   if (command === 'get_session') {
     if (!isUuid(body['sessionId'])) throw new RpcError(400, 'invalid_session_id');
-    const { data, error } = await serviceClient.rpc('get_squad_session_projection', {
+    const { data, error } = await userClient.rpc('get_squad_session_projection', {
       p_session_id: body['sessionId'],
     }) as RpcResult;
     if (error) throw rpcToHttp(error);
@@ -236,7 +237,7 @@ async function handle(
     if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 500) {
       throw new RpcError(400, 'invalid_limit');
     }
-    const { data, error } = await serviceClient.rpc('list_squad_events', {
+    const { data, error } = await userClient.rpc('list_squad_events', {
       p_session_id: body['sessionId'],
       p_after_sequence: afterSequence,
       p_limit: limit,
@@ -249,6 +250,7 @@ async function handle(
 }
 
 async function handleSubmitCommand(
+  userClient: SupabaseClient,
   serviceClient: SupabaseClient,
   userId: string,
   body: Record<string, unknown>,
@@ -277,7 +279,7 @@ async function handleSubmitCommand(
   if (context !== undefined && !isObject(context)) throw new RpcError(400, 'invalid_context');
   if (constraints !== undefined && !isObject(constraints)) throw new RpcError(400, 'invalid_constraints');
 
-  const { data, error } = await serviceClient.rpc('submit_captain_command', {
+  const { data, error } = await userClient.rpc('submit_captain_command', {
     p_client_request_id: clientRequestId,
     p_title: title,
     p_goal: goal,
