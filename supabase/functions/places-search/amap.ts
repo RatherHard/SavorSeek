@@ -59,7 +59,7 @@ export interface NormalizedPlace {
   latitude: number | null;
   longitude: number | null;
   rating: number | null;
-  cuisine_tags: string[];
+  cuisine_tags: string[] | null;
   price_level: number | null;
   business_status: 'open' | 'closed' | 'unknown' | null;
   raw: Record<string, string> | null;
@@ -247,7 +247,7 @@ function normalizePoi(poi: unknown): NormalizedPlace | null {
     rating: readRating(row.biz_ext),
     cuisine_tags: readCuisineTags(row.type),
     price_level: readPriceLevel(row.biz_ext),
-    business_status: readBusinessStatus(row.biz_ext),
+    business_status: readBusinessStatus(row),
     raw: buildRaw(row),
   };
 }
@@ -279,30 +279,36 @@ function readRating(value: unknown): number | null {
   return Number.isFinite(rating) && rating >= 0 && rating <= 5 ? rating : null;
 }
 
-/** Only accept explicitly supplied, bounded provider price levels. */
+function readCuisineTags(value: unknown): string[] | null {
+  const category = readString(value);
+  if (!category) return null;
+  const tags = category.split(/[;；]/).map((tag) => tag.trim()).filter(Boolean);
+  return tags.length > 0 ? [...new Set(tags)].slice(0, 32) : null;
+}
+
 function readPriceLevel(value: unknown): number | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  const raw = (value as Record<string, unknown>).price_level;
-  const level = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
-  return Number.isInteger(level) && level >= 1 && level <= 4 ? level : null;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const row = value as Record<string, unknown>;
+  const raw = row.cost ?? row.price_level;
+  if (typeof raw !== 'string' && typeof raw !== 'number') return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  const level = Math.round(parsed);
+  return level >= 1 && level <= 4 ? level : null;
 }
 
-function readBusinessStatus(value: unknown): 'open' | 'closed' | 'unknown' | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  const raw = (value as Record<string, unknown>).business_status;
-  return raw === 'open' || raw === 'closed' || raw === 'unknown' ? raw : null;
+function readBusinessStatus(row: Record<string, unknown>): 'open' | 'closed' | 'unknown' | null {
+  const raw = readString(row.business_status ?? row.status);
+  if (!raw) return null;
+  const normalized = raw.toLowerCase();
+  if (['open', '营业', '营业中'].includes(normalized)) return 'open';
+  if (['closed', '歇业', '停业'].includes(normalized)) return 'closed';
+  return 'unknown';
 }
 
-function readCuisineTags(value: unknown): string[] {
-  const raw = readString(value);
-  if (!raw) return [];
-  return raw
-    .replaceAll('；', ';')
-    .split(';')
-    .map((tag) => tag.trim())
-    .filter(Boolean);
-}
-
+/** 只留展示与溯源必需的字段，不留存完整响应。 */
 function buildRaw(row: Record<string, unknown>): Record<string, string> | null {
   const raw: Record<string, string> = {};
   for (

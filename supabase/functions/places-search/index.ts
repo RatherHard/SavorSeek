@@ -27,6 +27,7 @@ import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 
 import {
   type AmapQuery,
+  type NormalizedPlace,
   AMAP_EXTENSIONS,
   PAGE_SIZE,
   PLACE_RESPONSE_CONTRACT_VERSION,
@@ -34,21 +35,15 @@ import {
   searchAmapPlaces,
 } from './amap.ts';
 import {
-  planSearchPartitions,
-  type SearchBounds,
-} from './partition.ts';
-import {
-  mergePartitionBatches,
-  type BoundsFilters,
-  type PartitionBatch,
-} from './merge.ts';
-import {
   corsHeaders,
   errorResponse,
   jsonHeaders,
   PlacesSearchError,
 } from './errors.ts';
-
+import {
+  type SearchBounds,
+  planSearchPartitions,
+} from './partition.ts';
 
 /** 缓存有效期。地点的名称、地址与类别变动缓慢，一天足够新鲜。 */
 const CACHE_TTL_SECONDS = 86_400;
@@ -59,6 +54,8 @@ const MAX_RADIUS_METERS = 50_000;
 const MAX_PAGE = 10;
 const MAX_BOUNDS_SPAN_DEGREES = 20;
 const MAX_RESULT_LIMIT = 100;
+const BOUNDS_MAX_CALLS = 4;
+const BOUNDS_CONCURRENCY = 2;
 
 type SearchQuery = AmapQuery | BoundsSearchQuery;
 
@@ -213,11 +210,18 @@ function parsePage(value: unknown): number {
 
 interface BoundsSearchQuery {
   kind: 'bounds';
-  bounds: { south: number; west: number; north: number; east: number };
+  bounds: SearchBounds;
+  origin?: { latitude: number; longitude: number };
   keywords?: string;
   city?: string;
-  origin?: { latitude: number; longitude: number };
-  filters: BoundsFilters;
+  filters: {
+    cuisine_tags: string[];
+    min_price_level?: number;
+    max_price_level?: number;
+    max_distance_meters?: number;
+    open_now?: boolean;
+    min_rating?: number;
+  };
   limit: number;
   cursor?: string;
 }
@@ -240,9 +244,23 @@ function parseBoundsQuery(body: Record<string, unknown>): BoundsSearchQuery {
   }
   const rawFilters = body.filters;
   const filters = parseFilters(rawFilters);
-  const rawOrigin = body.origin;
-  const origin = parseOrigin(rawOrigin);
   const limit = parseLimit(body.limit);
+  const rawOrigin = body.origin;
+  const origin = rawOrigin === undefined || rawOrigin === null
+    ? undefined
+    : (() => {
+      if (typeof rawOrigin !== 'object' || Array.isArray(rawOrigin)) {
+        throw new PlacesSearchError('invalid_request', 'origin 必须是 JSON 对象。');
+      }
+      const value = rawOrigin as Record<string, unknown>;
+      return {
+        latitude: parseCoordinate(value.latitude, 90, '起点纬度'),
+        longitude: parseCoordinate(value.longitude, 180, '起点经度'),
+      };
+    })();
+  if (origin === undefined && filters.max_distance_meters !== undefined) {
+    throw new PlacesSearchError('invalid_request', '设置最大距离时必须提供 origin。');
+  }
   const keywords = readTrimmed(body.keywords);
   if (keywords && keywords.length > 80) {
     throw new PlacesSearchError('invalid_request', '关键词过长，请精简后重试。');
@@ -250,10 +268,10 @@ function parseBoundsQuery(body: Record<string, unknown>): BoundsSearchQuery {
   return {
     kind: 'bounds',
     bounds: { south, west, north, east },
+    origin,
     keywords,
     city: readTrimmed(body.city),
     filters,
-    origin,
     limit,
     cursor: readTrimmed(body.cursor),
   };
@@ -303,18 +321,7 @@ function parseFilters(value: unknown): BoundsSearchQuery['filters'] {
   };
 }
 
-function parseOrigin(value: unknown): { latitude: number; longitude: number } | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (typeof value !== 'object' || Array.isArray(value)) {
-    throw new PlacesSearchError('invalid_request', 'origin 必须是 JSON 对象。');
-  }
-  const row = value as Record<string, unknown>;
-  return {
-    latitude: parseCoordinate(row.latitude, 90, '纬度'),
-    longitude: parseCoordinate(row.longitude, 180, '经度'),
-  };
-}
-
+function parseLimit(value: unknown): number {
   if (value === undefined || value === null) return 50;
   const limit = Number(value);
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_RESULT_LIMIT) {
@@ -384,6 +391,8 @@ interface SearchResult {
   places: unknown[];
   fetched_at: string | null;
   from_cache: boolean;
+  count?: number;
+  has_more?: boolean;
   partial?: boolean;
   failed_tiles?: string[];
 }
@@ -431,67 +440,122 @@ async function resolveBoundsSearch(
     p_query_params: params,
     p_ttl_seconds: CACHE_TTL_SECONDS,
   });
-  if (cached) return cached as SearchResult;
+  if (cached) return applyBoundsResult(cached as SearchResult, query);
 
   const key = requireAmapKey();
-  const partitions = planSearchPartitions(query.bounds);
-  const batches: PartitionBatch[] = [];
-  const failedTiles: string[] = [];
-  const requests = partitions.flatMap((partition) =>
-    [1].map((page) => ({ partition, page }))
-  );
-  const settled = await Promise.allSettled(
-    requests.map(async ({ partition, page }) => ({
-      partition,
-      page,
-      places: await searchAmapPlaces({
+  const partitions = planSearchPartitions(query.bounds).slice(0, BOUNDS_MAX_CALLS);
+  const settled = await mapWithConcurrency(partitions, BOUNDS_CONCURRENCY, async (tile) => {
+    try {
+      const places = await searchAmapPlaces({
         kind: 'around',
-        latitude: partition.latitude,
-        longitude: partition.longitude,
-        radius: partition.radius,
+        latitude: tile.latitude,
+        longitude: tile.longitude,
+        radius: tile.radius,
         keywords: query.keywords,
-        page,
-      }, key),
-    })),
-  );
-  settled.forEach((result, index) => {
-    const request = requests[index];
-    if (result.status === 'fulfilled') {
-      batches.push(result.value);
-    } else {
-      failedTiles.push(`${request.partition.key}:page-${request.page}`);
+        page: 1,
+      }, key);
+      return { tile: tile.key, places };
+    } catch (error) {
+      return { tile: tile.key, error };
     }
   });
-  if (batches.length === 0) {
-    throw new PlacesSearchError(
-      'provider_unavailable',
-      '地点检索服务暂时不可用，请稍后重试。',
-      'all bounds partitions failed',
-    );
+  const failures = settled.filter((item): item is { tile: string; error: unknown } => 'error' in item);
+  const succeeded = settled.filter((item): item is { tile: string; places: NormalizedPlace[] } => 'places' in item);
+  if (succeeded.length === 0) {
+    const firstError = failures[0]?.error;
+    if (firstError instanceof PlacesSearchError) throw firstError;
+    throw new PlacesSearchError('provider_unavailable', '地点检索服务暂时不可用，请稍后重试。');
   }
-  const places = mergePartitionBatches(batches, {
-    bounds: query.bounds,
-    filters: query.filters,
-    origin: query.origin,
-    limit: query.limit,
-  });
-  const result: SearchResult = {
-    places,
-    fetched_at: new Date().toISOString(),
-    from_cache: false,
-    partial: failedTiles.length > 0,
-    failed_tiles: failedTiles.sort(),
-    has_more: false,
-  };
-  if (failedTiles.length === 0) {
-    const stored = await rpc(serviceClient, 'upsert_amap_places', {
+
+  const merged = filterBoundsPlaces(
+    dedupePlaces(succeeded.flatMap((item) => item.places)),
+    query,
+  );
+  const stored = failures.length === 0
+    ? await rpc(serviceClient, 'upsert_amap_places', {
       p_search_kind: 'bounds',
       p_query_params: params,
-      p_places: batches.flatMap((batch) => batch.places),
-    });
-    return (stored ?? result) as SearchResult;
+      p_places: merged,
+    })
+    : null;
+  const result = (stored ?? {
+    places: merged,
+    fetched_at: new Date().toISOString(),
+    from_cache: false,
+  }) as SearchResult;
+  return {
+    ...applyBoundsResult(result, query),
+    partial: failures.length > 0,
+    failed_tiles: failures.map((failure) => failure.tile),
+  };
+}
+
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  concurrency: number,
+  task: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < values.length) {
+      const index = next++;
+      results[index] = await task(values[index]);
+    }
   }
-  return result;
+  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, worker));
+  return results;
+}
+
+function dedupePlaces(places: NormalizedPlace[]): NormalizedPlace[] {
+  const seen = new Set<string>();
+  return places.filter((place) => {
+    if (seen.has(place.provider_place_id)) return false;
+    seen.add(place.provider_place_id);
+    return true;
+  });
+}
+
+function filterBoundsPlaces(places: NormalizedPlace[], query: BoundsSearchQuery): NormalizedPlace[] {
+  return places.filter((place) => {
+    if (place.latitude === null || place.longitude === null) return false;
+    const { latitude, longitude } = place;
+    const insideLongitude = query.bounds.west <= query.bounds.east
+      ? longitude >= query.bounds.west && longitude <= query.bounds.east
+      : longitude >= query.bounds.west || longitude <= query.bounds.east;
+    if (latitude < query.bounds.south || latitude > query.bounds.north || !insideLongitude) return false;
+    const filters = query.filters;
+    if (filters.cuisine_tags.length > 0 && !filters.cuisine_tags.some((tag) =>
+      place.cuisine_tags?.some((candidate) => candidate.toLowerCase() === tag.toLowerCase())
+    )) return false;
+    if (filters.min_price_level !== undefined &&
+      (place.price_level === null || place.price_level < filters.min_price_level)) return false;
+    if (filters.max_price_level !== undefined &&
+      (place.price_level === null || place.price_level > filters.max_price_level)) return false;
+    if (filters.min_rating !== undefined &&
+      (place.rating === null || place.rating < filters.min_rating)) return false;
+    if (filters.open_now !== undefined) {
+      const isOpen = place.business_status === 'open';
+      if (isOpen !== filters.open_now) return false;
+    }
+    if (query.origin && filters.max_distance_meters !== undefined &&
+      distanceMeters(query.origin.latitude, query.origin.longitude, latitude, longitude) > filters.max_distance_meters) return false;
+    return true;
+  }).sort((left, right) => (right.rating ?? -1) - (left.rating ?? -1) ||
+    left.provider_place_id.localeCompare(right.provider_place_id)).slice(0, query.limit);
+}
+
+function distanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const radians = Math.PI / 180;
+  const dLat = (lat2 - lat1) * radians;
+  const dLon = (lon2 - lon1) * radians;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * radians) * Math.cos(lat2 * radians) * Math.sin(dLon / 2) ** 2;
+  return 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function applyBoundsResult(result: SearchResult, query: BoundsSearchQuery): SearchResult {
+  const places = filterBoundsPlaces(result.places as NormalizedPlace[], query);
+  return { ...result, places, count: places.length, has_more: places.length >= query.limit };
 }
 
 function toBoundsQueryParams(
@@ -502,7 +566,6 @@ function toBoundsQueryParams(
     city: query.city ?? null,
     keywords: query.keywords ?? null,
     filters: query.filters,
-    origin: query.origin ?? null,
     limit: query.limit,
     cursor: query.cursor ?? null,
     contract_version: 'places-filter-v1',
