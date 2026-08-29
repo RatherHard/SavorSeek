@@ -49,12 +49,23 @@ class _ErrorView extends StatelessWidget {
   Widget build(BuildContext context) => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
-      const Expanded(child: Text('Agent 暂不可用，请稍后重试。')),
-      if (controller.hasSession)
+      Expanded(
+        child: Text(
+          controller.error ?? 'Agent 暂不可用，请稍后重试。',
+          semanticsLabel: 'Agent 错误：${controller.error ?? '暂不可用，请稍后重试'}',
+        ),
+      ),
+      if (controller.canRetrySubmit)
+        IconButton(
+          onPressed: controller.retrySubmit,
+          icon: const Icon(Icons.refresh),
+          tooltip: '重试原指令',
+        )
+      else if (controller.hasSession)
         IconButton(
           onPressed: controller.refresh,
           icon: const Icon(Icons.refresh),
-          tooltip: '重试',
+          tooltip: '重试同步',
         ),
     ],
   );

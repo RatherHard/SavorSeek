@@ -191,6 +191,11 @@ class _ExplorePageState extends State<ExplorePage> {
   Future<void> _submitCommand(String command) async {
     final agent = widget.agentController;
     if (agent != null) {
+      if (widget.auth?.isSignedIn != true) {
+        final auth = widget.auth;
+        if (auth != null) await showAuthSheet(context, auth: auth);
+        return;
+      }
       final position = _lastCameraPosition ?? AmapSurface.initialCamera;
       final size = _mapSize;
       final viewport = size == null
@@ -294,7 +299,9 @@ class _ExplorePageState extends State<ExplorePage> {
                   if (widget.agentController != null)
                     Positioned.fill(
                       child: IgnorePointer(
-                        ignoring: !widget.agentController!.hasSession,
+                        ignoring:
+                            !widget.agentController!.hasSession &&
+                            widget.agentController!.error == null,
                         child: AgentWorkspacePanel(
                           controller: widget.agentController!,
                         ),
