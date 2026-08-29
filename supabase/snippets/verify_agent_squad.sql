@@ -41,3 +41,20 @@ where p.pubname = 'supabase_realtime'
     'squad_events', 'decision_checkpoints', 'memory_proposals',
     'recommendation_sets', 'trip_drafts'
   ); -- expected: 9
+
+select count(*) as command_rpc_count
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public'
+  and p.proname in (
+    'submit_captain_command', 'cancel_squad_session', 'list_squad_events',
+    'append_squad_event', 'agent_idempotency_begin', 'agent_idempotency_store'
+  ); -- expected: 6
+
+select
+  has_function_privilege('authenticated', 'public.submit_captain_command(uuid,varchar,varchar,varchar,text,jsonb,jsonb,text,text,varchar)', 'EXECUTE')
+    as submit_rpc_granted,
+  has_function_privilege('authenticated', 'public.cancel_squad_session(uuid)', 'EXECUTE')
+    as cancel_rpc_granted,
+  has_function_privilege('authenticated', 'public.list_squad_events(uuid,bigint,integer)', 'EXECUTE')
+    as list_events_rpc_granted; -- expected: true, true, true
