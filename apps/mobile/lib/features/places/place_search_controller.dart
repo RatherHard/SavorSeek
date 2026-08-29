@@ -269,6 +269,64 @@ class PlaceSearchController extends ChangeNotifier {
 
   List<Place>? get viewportPlaces => _viewportResult?.places;
 
+  Future<void> searchStructured({
+    required PlaceSearchQuery query,
+    String? queryKey,
+  }) async {
+    if (queryKey != null &&
+        queryKey == _lastViewportKey &&
+        _viewportResult != null) {
+      return;
+    }
+
+    final requestId = ++_requestId;
+    final previous = _viewportResult;
+    final trimmed = query.keywords?.trim() ?? '';
+    _lastViewportKey = queryKey;
+    _setState(PlaceSearchLoading(trimmed, source: PlaceSearchSource.viewport));
+
+    try {
+      final result = await _repository.search(query);
+      if (_isStale(requestId)) return;
+      _viewportResult = result;
+      _setState(
+        result.isEmpty
+            ? PlaceSearchEmpty(trimmed, source: PlaceSearchSource.viewport)
+            : PlaceSearchLoaded(
+                keywords: trimmed,
+                result: result,
+                source: PlaceSearchSource.viewport,
+                queryKey: queryKey,
+                query: query,
+              ),
+      );
+    } on PlaceSearchException catch (error) {
+      if (_isStale(requestId)) return;
+      _setState(
+        PlaceSearchFailed(
+          keywords: trimmed,
+          message: error.message,
+          failure: error.failure,
+          source: PlaceSearchSource.viewport,
+          queryKey: queryKey,
+          hasPreviousResult: previous != null && !previous.isEmpty,
+        ),
+      );
+    } on Exception {
+      if (_isStale(requestId)) return;
+      _setState(
+        PlaceSearchFailed(
+          keywords: trimmed,
+          message: '地点检索暂时不可用，请稍后重试。',
+          failure: PlaceSearchFailure.storageFailure,
+          source: PlaceSearchSource.viewport,
+          queryKey: queryKey,
+          hasPreviousResult: previous != null && !previous.isEmpty,
+        ),
+      );
+    }
+  }
+
   Future<void> search(PlaceSearchQuery query) async {
     final requestId = ++_requestId;
     _selected = null;

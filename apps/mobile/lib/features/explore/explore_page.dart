@@ -262,7 +262,7 @@ class _ExplorePageState extends State<ExplorePage> {
               return Stack(
                 children: [
                   Positioned.fill(child: _buildMapArea()),
-                  if (search != null) ..._buildOverlays(search),
+          if (search != null) ..._buildOverlays(search),
                 ],
               );
             },
