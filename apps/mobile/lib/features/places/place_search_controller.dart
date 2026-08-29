@@ -288,7 +288,7 @@ class PlaceSearchController extends ChangeNotifier {
       if (_isStale(requestId)) return;
       _keywordResult = result;
       _setState(
-        result.isEmpty
+        result.isEmpty && !result.isPartial
             ? PlaceSearchEmpty(query.keywords?.trim() ?? '')
             : PlaceSearchLoaded(
                 keywords: query.keywords?.trim() ?? '',
