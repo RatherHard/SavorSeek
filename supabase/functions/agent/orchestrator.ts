@@ -8,13 +8,15 @@
  * 数据库访问使用 service-role 客户端：任务行属于编排器内部状态，RLS 撤销了
  * 客户端 DML；service-role 只在服务端函数内使用，绝不回传客户端。
  */
-import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2';
+import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 
 import { verifyCandidates } from './fact.ts';
 import { parseCommandIntent } from './intent.ts';
 import { readMemorySignals } from './memory.ts';
 import { rankPlaces } from './recommend.ts';
+import { planRoute, toTripDraftItems } from './route.ts';
 import { searchAmapPlaces, requireAmapKey, type AmapQuery } from '../places-search/amap.ts';
+import { resolveRoute, type GeoPoint, type TravelMode } from '../trip-route/amap.ts';
 import {
   OrchestrationError,
   type AgentRole,
@@ -29,12 +31,24 @@ const PHASE_TIMEOUT_MS: Record<string, number> = {
   map: 15_000,
   fact: 10_000,
   recommend: 8_000,
+  route: 15_000,
   present: 5_000,
 };
 
 interface OrchestrationDeps {
   serviceClient: SupabaseClient;
   userId: string;
+  planId: string;
+}
+
+interface PhaseResult {
+  summary: string;
+  complete: boolean;
+  artifact?: {
+    type: string;
+    payload: Record<string, unknown>;
+    confidence?: number | null;
+  };
 }
 
 export async function runOrchestration(
@@ -44,32 +58,50 @@ export async function runOrchestration(
   commandId: string,
   taskId: string,
 ): Promise<void> {
-  const deps: OrchestrationDeps = { serviceClient, userId };
+  const deps: OrchestrationDeps = { serviceClient, userId, planId: '' };
 
   const { data: commandRow } = await serviceClient
     .from('captain_commands')
-    .select('raw_text, task_type, context, constraints_json')
+    .select('raw_text, task_type, context, constraints_json, memory_policy')
     .eq('id', commandId)
     .single();
   if (!commandRow) {
     await failSession(deps, sessionId, taskId, 'command_missing', '指令不存在');
     return;
   }
+  const { data: planRow } = await serviceClient
+    .from('agent_plans')
+    .select('id')
+    .eq('command_id', commandId)
+    .eq('session_id', sessionId)
+    .single();
+  if (!planRow) {
+    await failSession(deps, sessionId, taskId, 'plan_missing', '任务计划不存在');
+    return;
+  }
+  deps.planId = String(planRow['id']);
 
   const ctx: OrchestrationContext = {
     sessionId,
     commandId,
+    planId: deps.planId,
     taskId,
     userId,
     rawText: String(commandRow['raw_text'] ?? ''),
     taskType: String(commandRow['task_type'] ?? 'discover_places'),
+    context: (commandRow['context'] ?? {}) as Record<string, unknown>,
     constraints: (commandRow['constraints_json'] ?? {}) as Record<string, unknown>,
+    memoryPolicy: commandRow['memory_policy'] === 'disabled' || commandRow['memory_policy'] === 'read_only'
+      ? commandRow['memory_policy']
+      : 'propose_only',
     intent: null,
     memoryNotes: [],
     candidates: [],
     verified: [],
     recommendations: [],
     routePath: null,
+    tripDraftId: null,
+    pendingDecision: false,
     degraded: [],
   };
 
@@ -95,7 +127,7 @@ export async function runOrchestration(
         budgetPerPersonMinor: ctx.intent.budgetPerPersonMinor,
         avoid: ctx.intent.avoid,
       });
-      return { summary: intentSummary(ctx.intent), complete: true };
+      return { summary: intentSummary(ctx.intent), complete: true, artifact: { type: 'intent', payload: { intent: ctx.intent }, confidence: 1 } };
     }, PHASE_TIMEOUT_MS.intent),
     runPhase(deps, ctx, 'preference_advisor', 'memory', async () => {
       const signals = await readMemorySignals(serviceClient, userId);
@@ -105,6 +137,7 @@ export async function runOrchestration(
           ? `读取到 ${signals.favoriteCount} 条收藏偏好`
           : '暂无历史偏好，使用显式条件',
         complete: true,
+        artifact: { type: 'memory_context', payload: { favoriteCount: signals.favoriteCount, favoriteNames: signals.favoriteNames } },
       };
     }, PHASE_TIMEOUT_MS.memory),
   ]);
@@ -122,7 +155,7 @@ export async function runOrchestration(
     if (ctx.candidates.length === 0) {
       return { summary: '当前区域没有找到候选地点', complete: false };
     }
-    return { summary: `找到 ${ctx.candidates.length} 个候选地点`, complete: true };
+    return { summary: `找到 ${ctx.candidates.length} 个候选地点`, complete: true, artifact: { type: 'place_candidates', payload: { candidates: ctx.candidates } } };
   }, PHASE_TIMEOUT_MS.map);
   if (await checkCancelled(deps, sessionId)) return;
 
@@ -139,6 +172,7 @@ export async function runOrchestration(
     return {
       summary: `核验完成，${usable}/${ctx.verified.length} 个候选可用`,
       complete: usable > 0,
+      artifact: { type: 'fact_check', payload: { places: ctx.verified } },
     };
   }, PHASE_TIMEOUT_MS.fact);
   if (await checkCancelled(deps, sessionId)) return;
@@ -160,12 +194,144 @@ export async function runOrchestration(
       centerLongitude: viewport?.longitude ?? null,
       resultLimit,
     });
-    return { summary: `已生成 ${ctx.recommendations.length} 条推荐`, complete: true };
+    return { summary: `已生成 ${ctx.recommendations.length} 条推荐`, complete: true, artifact: { type: 'recommendation_set', payload: { items: ctx.recommendations } } };
   }, PHASE_TIMEOUT_MS.recommend);
   if (await checkCancelled(deps, sessionId)) return;
 
-  // ── Phase F：Present 汇总落库（E 阶段路线在本轮延后）────────────
+  // ── Phase E（可选）：Route 生成行程草案 ─────────────────────────
+  const wantRoute = ctx.intent!.needRoute ||
+    ctx.taskType === 'plan_route' ||
+    ctx.taskType === 'replan_trip';
+  if (wantRoute) {
+    await runPhase(deps, ctx, 'route_planner', 'route', async () => {
+      const route = planRoute(usable, ctx.recommendations, {
+        startDate: nextDinnerDate(),
+        startHour: 18,
+        maxStops: 5,
+      });
+      if (route.stops.length === 0) {
+        return { summary: route.warnings.join('；'), complete: false };
+      }
+      const tripContextTripId = (ctx.context['tripId'] as string | undefined) ?? null;
+      if (!tripContextTripId) {
+        // 无关联行程：路线阶段降级为仅展示顺序（不写草案）。
+        ctx.degraded.push('未关联行程，路线草案未落库');
+        await appendEvent(deps, ctx.sessionId, ctx.commandId, null, 'trip.draft.created', {
+          stops: route.stops.length,
+          warnings: route.warnings,
+          persisted: false,
+        });
+        return { summary: `已排出 ${route.stops.length} 站顺序（未关联行程，未落草案）`, complete: false };
+      }
+      const { data: tripRow, error: tripError } = await deps.serviceClient
+        .from('trips')
+        .select('start_date, revision, default_travel_mode')
+        .eq('id', tripContextTripId)
+        .eq('user_id', ctx.userId)
+        .single();
+      if (tripError || !tripRow) throw new OrchestrationError('trip_context_missing', '目标行程不存在');
+      const targetDate = typeof tripRow['start_date'] === 'string' ? tripRow['start_date'] : nextDinnerDate();
+      const plannedRoute = planRoute(usable, ctx.recommendations, {
+        startDate: targetDate,
+        startHour: 18,
+        maxStops: 5,
+      });
+      const routePoints: GeoPoint[] = plannedRoute.stops
+        .map((stop) => stop.placeSnapshot)
+        .filter((snapshot): snapshot is Record<string, unknown> => snapshot !== null)
+        .flatMap((snapshot) => {
+          const latitude = snapshot['latitude'];
+          const longitude = snapshot['longitude'];
+          return typeof latitude === 'number' && typeof longitude === 'number'
+            ? [{ latitude, longitude }]
+            : [];
+        });
+      let routePath: GeoPoint[] = [];
+      try {
+        const mode = tripRow['default_travel_mode'] === 'driving' ? 'driving' :
+          tripRow['default_travel_mode'] === 'cycling' ? 'bicycling' : 'walking';
+        routePath = await resolveRoute(routePoints, mode as TravelMode, requireAmapKey());
+      } catch (_error) {
+        plannedRoute.warnings.push('路线服务不可用，当前仅保留地点顺序和估算时间');
+      }
+      const placeIds = await persistPlaces(deps, usable);
+      const { data: draftRow, error } = await deps.serviceClient.from('trip_drafts').insert({
+        trip_id: tripContextTripId,
+        session_id: ctx.sessionId,
+        source_task_id: null,
+        base_revision: typeof ctx.context['tripRevision'] === 'number'
+          ? Math.trunc(ctx.context['tripRevision'] as number)
+          : Number(tripRow['revision'] ?? 1),
+        status: 'proposed',
+        items: toTripDraftItems(plannedRoute.stops, ctx.recommendations, placeIds),
+        route_segments: routePath,
+        warnings: plannedRoute.warnings,
+        requires_captain_approval: true,
+      }).select('id').single();
+      if (error) {
+        throw new OrchestrationError('route_write_failed', error.message);
+      }
+      ctx.tripDraftId = String((draftRow as Record<string, unknown>)['id']);
+      const { data: checkpoint, error: checkpointError } = await deps.serviceClient
+        .from('decision_checkpoints')
+        .insert({
+          session_id: ctx.sessionId,
+          kind: 'apply_trip_draft',
+          question: '路线草案需要更新当前行程，是否应用？',
+          options: [
+            { id: 'apply', label: '应用草案', impact: '更新当前行程版本' },
+            { id: 'keep_locked', label: '保留现有安排', impact: '仅查看冲突' },
+            { id: 'cancel', label: '取消本次调整', impact: '不修改行程' },
+          ],
+          affected_resource_refs: [tripContextTripId, ctx.tripDraftId],
+          status: 'pending',
+        })
+        .select('id')
+        .single();
+      if (checkpointError) throw new OrchestrationError('checkpoint_write_failed', checkpointError.message);
+      ctx.pendingDecision = true;
+      await appendEvent(deps, ctx.sessionId, ctx.commandId, null, 'trip.draft.created', {
+        draftId: ctx.tripDraftId,
+        stops: plannedRoute.stops.length,
+        warnings: plannedRoute.warnings,
+      });
+      await appendEvent(deps, ctx.sessionId, ctx.commandId, null, 'decision.required', {
+        checkpointId: (checkpoint as Record<string, unknown>)['id'],
+        draftId: ctx.tripDraftId,
+      });
+      return { summary: `已生成 ${plannedRoute.stops.length} 站路线草案，等待队长确认`, complete: true, artifact: { type: 'trip_draft', payload: { draftId: ctx.tripDraftId, stops: plannedRoute.stops } } };
+    }, PHASE_TIMEOUT_MS.route);
+    if (await checkCancelled(deps, sessionId)) return;
+  }
+
+  // ── Phase F：Present 汇总落库 ────────────────────────────────────
   await runPhase(deps, ctx, 'result_coordinator', 'present', async () => {
+    const placeIds = await persistPlaces(deps, usable);
+    ctx.recommendations = ctx.recommendations.map((item) => ({
+      ...item,
+      placeId: placeIds.get(item.name) ?? item.placeId,
+    }));
+    const artifact = {
+      session_id: ctx.sessionId,
+      task_id: ctx.taskId,
+      schema_version: 1,
+      artifact_type: 'recommendation_set',
+      producer: 'result_coordinator',
+      payload: { items: ctx.recommendations, warnings: ctx.degraded },
+      confidence: ctx.recommendations.length > 0
+        ? ctx.recommendations.reduce((sum, item) => sum + item.confidence, 0) / ctx.recommendations.length
+        : null,
+      warnings: ctx.degraded,
+      requires_captain_approval: false,
+      is_captain_visible: true,
+    };
+    const { data: storedArtifact, error: storedArtifactError } = await deps.serviceClient
+      .from('agent_artifacts').insert(artifact).select('id').single();
+    if (storedArtifactError) throw new OrchestrationError('artifact_write_failed', storedArtifactError.message);
+    await appendEvent(deps, ctx.sessionId, ctx.commandId, ctx.taskId, 'artifact.created', {
+      artifactId: (storedArtifact as Record<string, unknown>)['id'],
+      artifactType: 'recommendation_set',
+    });
     const { error } = await serviceClient.from('recommendation_sets').insert({
       session_id: sessionId,
       task_id: taskId,
@@ -178,20 +344,108 @@ export async function runOrchestration(
     return { summary: `已汇总 ${ctx.recommendations.length} 条推荐结果`, complete: true };
   }, PHASE_TIMEOUT_MS.present);
 
+  // ── 记忆提案：意图与忌口经队长确认后才写入长期记忆 ──────────────
+  await proposeMemoryFromIntent(deps, ctx);
+
   // ── 会话收尾 ─────────────────────────────────────────────────────
   const partial = ctx.degraded.length > 0;
-  await serviceClient.from('squad_sessions').update({
-    status: partial ? 'partially_completed' : 'completed',
+  const hasDraft = ctx.tripDraftId !== null;
+  await deps.serviceClient.from('squad_sessions').update({
+    status: ctx.pendingDecision ? 'awaiting_captain_decision' : (partial ? 'partially_completed' : 'completed'),
   }).eq('id', sessionId);
-  await serviceClient.from('captain_commands').update({
+  await deps.serviceClient.from('captain_commands').update({
     status: partial ? 'partially_completed' : 'completed',
   }).eq('id', commandId);
   await appendEvent(deps, sessionId, commandId, null, partial ? 'session.partially_completed' : 'session.completed', {
     summary: partial
       ? `部分完成：${ctx.degraded.join('；')}`
-      : `小队任务完成，共 ${ctx.recommendations.length} 条推荐`,
+      : hasDraft
+        ? `小队任务完成，${ctx.recommendations.length} 条推荐与路线草案待确认`
+        : `小队任务完成，共 ${ctx.recommendations.length} 条推荐`,
     degraded: ctx.degraded,
+    tripDraftId: ctx.tripDraftId,
   });
+}
+
+/**
+ * 从意图生成记忆提案（propose_only 语义）。
+ * 只有当指令中出现了可沉淀的偏好（忌口/预算/时段）时才提案，
+ * 队长接受后才进入 user_memories。
+ */
+async function proposeMemoryFromIntent(deps: OrchestrationDeps, ctx: OrchestrationContext): Promise<void> {
+  if (ctx.intent === null || ctx.memoryPolicy !== 'propose_only') return;
+  const proposals: Array<{ operation: string; memoryKey: string; value: Record<string, unknown>; confidence: number }> = [];
+  if (ctx.intent.avoid.length > 0) {
+    proposals.push({
+      operation: 'create',
+      memoryKey: 'avoid',
+      value: { items: ctx.intent.avoid, note: '来自队长指令' },
+      confidence: 0.9,
+    });
+  }
+  if (ctx.intent.budgetPerPersonMinor !== null) {
+    proposals.push({
+      operation: 'create',
+      memoryKey: 'budget_per_person',
+      value: { maxMinor: ctx.intent.budgetPerPersonMinor, note: '来自队长指令' },
+      confidence: 0.8,
+    });
+  }
+  if (proposals.length === 0) return;
+
+  for (const proposal of proposals) {
+    const { error } = await deps.serviceClient.from('memory_proposals').insert({
+      session_id: ctx.sessionId,
+      task_id: ctx.taskId,
+      user_id: ctx.userId,
+      operation: proposal.operation,
+      memory_key: proposal.memoryKey,
+      proposed_value: proposal.value,
+      confidence: proposal.confidence,
+      status: 'proposed',
+    });
+    if (error) {
+      console.error('memory proposal insert failed:', error.message);
+      continue;
+    }
+    await appendEvent(deps, ctx.sessionId, ctx.commandId, null, 'memory.proposed', {
+      memoryKey: proposal.memoryKey,
+      value: proposal.value,
+      confidence: proposal.confidence,
+    });
+  }
+}
+
+async function persistPlaces(
+  deps: OrchestrationDeps,
+  places: PlaceCandidate[],
+): Promise<Map<string, string>> {
+  const placeIds = new Map<string, string>();
+  for (const place of places) {
+    const { data, error } = await deps.serviceClient
+      .from('places')
+      .upsert({
+        provider: 'amap',
+        provider_place_id: place.provider_place_id,
+        name: place.name,
+        category: place.category,
+        address: place.address,
+        latitude: place.latitude,
+        longitude: place.longitude,
+        coordinate_system: 'gcj02',
+        fetched_at: new Date().toISOString(),
+      }, { onConflict: 'provider,provider_place_id' })
+      .select('id')
+      .single();
+    if (error || !data) throw new OrchestrationError('place_cache_write_failed', error?.message ?? '地点缓存写入失败');
+    placeIds.set(place.name, String((data as Record<string, unknown>)['id']));
+  }
+  return placeIds;
+}
+
+/** 路线默认锚定“今天/明天 18:00”晚餐（MVP：无会话内具体日期时使用）。 */
+function nextDinnerDate(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 /** 执行单阶段：建任务行 → running → 事件 → 成功/失败收敛，含一次性重试。 */
@@ -200,7 +454,7 @@ async function runPhase(
   ctx: OrchestrationContext,
   role: AgentRole,
   phaseName: string,
-  work: () => Promise<{ summary: string; complete: boolean }>,
+  work: () => Promise<PhaseResult>,
   timeoutMs: number,
 ): Promise<void> {
   const taskId = await createTask(deps, ctx.sessionId, ctx.commandId, role);
@@ -208,8 +462,31 @@ async function runPhase(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const { summary, complete } = await work();
+      const { summary, complete, artifact } = await work();
       clearTimeout(timer);
+      if (artifact) {
+        const { data: artifactRow, error: artifactError } = await deps.serviceClient
+          .from('agent_artifacts')
+          .insert({
+            session_id: ctx.sessionId,
+            task_id: taskId,
+            schema_version: 1,
+            artifact_type: artifact.type,
+            producer: role,
+            payload: artifact.payload,
+            confidence: artifact.confidence ?? null,
+            warnings: [],
+            requires_captain_approval: false,
+            is_captain_visible: true,
+          })
+          .select('id')
+          .single();
+        if (artifactError) throw new OrchestrationError('artifact_write_failed', artifactError.message);
+        await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, 'artifact.created', {
+          artifactId: (artifactRow as Record<string, unknown>)['id'],
+          artifactType: artifact.type,
+        });
+      }
       await deps.serviceClient.from('agent_tasks').update({
         status: complete ? 'succeeded' : 'partial',
         user_summary: summary,
@@ -228,6 +505,7 @@ async function runPhase(
 
   await deps.serviceClient.from('agent_tasks').update({ status: 'running', started_at: new Date().toISOString() }).eq('id', taskId);
   await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, 'task.started', { role, phase: phaseName });
+  await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, 'task.progressed', { role, phase: phaseName, progress: 10 });
 
   const firstOk = await attempt();
   if (firstOk) return;
@@ -266,6 +544,7 @@ async function createTask(
   const { data, error } = await deps.serviceClient.from('agent_tasks').insert({
     session_id: sessionId,
     command_id: commandId,
+    plan_id: deps.planId,
     role,
     status: 'queued',
   }).select('id').single();
@@ -273,9 +552,17 @@ async function createTask(
     throw new OrchestrationError('task_create_failed', error?.message ?? 'task insert returned no id');
   }
   const id = String(data['id']);
+  const { error: stepError } = await deps.serviceClient.from('agent_steps').insert({
+    task_id: id,
+    plan_id: deps.planId,
+    kind: role,
+    status: 'queued',
+  });
+  if (stepError) throw new OrchestrationError('step_create_failed', stepError.message);
   await appendEvent(deps, sessionId, commandId, id, 'task.created', { role });
   return id;
 }
+
 
 async function progress(
   deps: OrchestrationDeps,
@@ -306,7 +593,7 @@ async function appendEvent(
     p_visibility: 'captain',
   });
   if (error) {
-    console.error('append_squad_event failed:', error.message);
+    throw new OrchestrationError('event_write_failed', error.message);
   }
 }
 

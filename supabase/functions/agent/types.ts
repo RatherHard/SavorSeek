@@ -100,10 +100,13 @@ export interface RecommendationItem {
 export interface OrchestrationContext {
   sessionId: string;
   commandId: string;
+  planId: string;
   taskId: string;
   userId: string;
   rawText: string;
   taskType: string;
+  context: Record<string, unknown>;
+  memoryPolicy: 'disabled' | 'read_only' | 'propose_only';
   constraints: Record<string, unknown>;
   intent: ParsedIntent | null;
   memoryNotes: string[];
@@ -111,6 +114,8 @@ export interface OrchestrationContext {
   verified: VerifiedPlace[];
   recommendations: RecommendationItem[];
   routePath: Array<{ latitude: number; longitude: number }> | null;
+  tripDraftId: string | null;
+  pendingDecision: boolean;
   degraded: string[];
 }
 

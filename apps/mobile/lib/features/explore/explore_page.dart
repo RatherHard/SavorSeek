@@ -7,6 +7,8 @@ import 'package:x_amap_base/x_amap_base.dart';
 import 'package:savorseek/app/config/amap_config.dart';
 import 'package:savorseek/app/theme/design_tokens.dart';
 import 'package:savorseek/features/explore/agent_command_bar.dart';
+import 'package:savorseek/features/agent/agent_controller.dart';
+import 'package:savorseek/features/agent/agent_workspace_panel.dart';
 import 'package:savorseek/features/explore/amap_consent.dart';
 import 'package:savorseek/features/explore/amap_surface.dart';
 import 'package:savorseek/features/explore/place_results_drawer.dart';
@@ -38,6 +40,7 @@ class ExplorePage extends StatefulWidget {
     this.auth,
     this.scheduler,
     this.consent,
+    this.agentController,
   });
 
   /// 地点检索仓库。为空时检索入口禁用（未注入后端依赖的场景）。
@@ -54,6 +57,8 @@ class ExplorePage extends StatefulWidget {
 
   /// 认证能力，用于未登录收藏时打开登录引导。
   final AuthService? auth;
+
+  final AgentController? agentController;
 
   @override
   State<ExplorePage> createState() => _ExplorePageState();
@@ -97,6 +102,7 @@ class _ExplorePageState extends State<ExplorePage> {
     super.initState();
     _consent.addListener(_onConsentChanged);
     widget.favoriteController?.addListener(_onFavoritesChanged);
+    widget.agentController?.addListener(_onAgentChanged);
     final repository = widget.placeRepository;
     if (repository != null) {
       _search = PlaceSearchController(repository)
@@ -111,6 +117,9 @@ class _ExplorePageState extends State<ExplorePage> {
   }
 
   void _onFavoritesChanged() => setState(() {});
+  void _onAgentChanged() {
+    if (mounted) setState(() {});
+  }
 
   void _onCameraMoveEnd(CameraPosition position) {
     _lastCameraPosition = position;
@@ -173,11 +182,17 @@ class _ExplorePageState extends State<ExplorePage> {
     if (_ownsConsent) _consent.dispose();
     _search?.removeListener(_onSearchChanged);
     widget.favoriteController?.removeListener(_onFavoritesChanged);
+    widget.agentController?.removeListener(_onAgentChanged);
     _search?.dispose();
     super.dispose();
   }
 
   Future<void> _submitCommand(String command) async {
+    final agent = widget.agentController;
+    if (agent != null) {
+      await agent.submit(command);
+      return;
+    }
     await _search?.searchByKeywords(command, city: _defaultCity);
     if (!mounted) return;
     final state = _search?.state;
@@ -255,7 +270,14 @@ class _ExplorePageState extends State<ExplorePage> {
               return Stack(
                 children: [
                   Positioned.fill(child: _buildMapArea()),
-                  if (search != null) ..._buildOverlays(search),
+                   if (search != null) ..._buildOverlays(search),
+                  if (widget.agentController != null)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        ignoring: !widget.agentController!.hasSession,
+                        child: AgentWorkspacePanel(controller: widget.agentController!),
+                      ),
+                    ),
                 ],
               );
             },
@@ -265,7 +287,9 @@ class _ExplorePageState extends State<ExplorePage> {
         AgentCommandBar(
           // 未注入仓库或正在检索时不接受新指令：前者点了没有反馈，
           // 后者会让两次结果竞争。
-          onSubmit: search == null || search.isLoading ? null : _submitCommand,
+          onSubmit: search == null || search.isLoading || widget.agentController?.isSubmitting == true
+              ? null
+              : _submitCommand,
         ),
       ],
     );
