@@ -134,7 +134,13 @@ async function handle(
     const { data, error } = await userClient.rpc('retry_agent_task', { p_task_id: body['taskId'] }) as RpcResult;
     if (error) throw rpcToHttp(error);
     const retry = data as Record<string, unknown>;
-    void runOrchestration(serviceClient, userId, String(retry['sessionId']), String(retry['commandId']), String(retry['taskId']));
+    EdgeRuntime.waitUntil(runOrchestration(
+      serviceClient,
+      userId,
+      String(retry['sessionId']),
+      String(retry['commandId']),
+      String(retry['taskId']),
+    ));
     return json({ ok: true, ...retry });
   }
   if (command === 'select_recommendation') {
@@ -353,18 +359,11 @@ async function handleSubmitCommand(
     return json({ ok: true, ...skeleton });
   }
 
-  // 异步执行编排：HTTP 立即返回骨架，阶段进度经事件流推送。
+  // 由 Edge Runtime 托管异步执行生命周期；普通 fire-and-forget 可能在响应后被终止。
   const sessionId = String(skeleton['sessionId']);
   const commandId = String(skeleton['commandId']);
   const taskId = String(skeleton['taskId']);
-  void runOrchestration(serviceClient, userId, sessionId, commandId, taskId).catch(
-    (orchestrationError: unknown) => {
-      console.error(
-        'orchestration crashed:',
-        orchestrationError instanceof Error ? orchestrationError.message : orchestrationError,
-      );
-    },
-  );
+  EdgeRuntime.waitUntil(runOrchestration(serviceClient, userId, sessionId, commandId, taskId));
 
   return json({ ok: true, ...skeleton });
 }

@@ -116,7 +116,12 @@ begin
 
   update public.recommendation_sets
   set status = 'captain_selected',
-      selected_place_ids = coalesce(selected_place_ids, '{}'::uuid[]),
+      selected_place_ids = coalesce((
+        select array_agg((item->>'placeId')::uuid order by (item->>'rank')::int)
+        from jsonb_array_elements(items) item
+        where (item->>'name') = any(p_place_names)
+          and item->>'placeId' is not null
+      ), '{}'::uuid[]),
       items = (
         select coalesce(jsonb_agg(
           case when (item->>'name') = any(p_place_names)
@@ -135,7 +140,7 @@ begin
   end if;
 
   perform public.append_squad_event(
-    p_session_id, null, null, 'recommendation.proposed', 'captain',
+    p_session_id, null, null, 'map.projection.updated', 'captain',
     jsonb_build_object('action', 'captain_selected', 'places', p_place_names)
   );
   return jsonb_build_object('status', 'captain_selected', 'selected', p_place_names);
@@ -162,7 +167,7 @@ begin
     raise exception using errcode = '22023', message = 'recommendation set not rejectable';
   end if;
   perform public.append_squad_event(
-    p_session_id, null, null, 'recommendation.proposed', 'captain',
+    p_session_id, null, null, 'map.projection.updated', 'captain',
     jsonb_build_object('action', 'rejected', 'recommendationSetId', p_recommendation_set_id)
   );
   return jsonb_build_object('status', 'rejected');

@@ -8,8 +8,9 @@ where table_schema = 'public'
     'squad_sessions', 'captain_commands', 'agent_plans', 'agent_tasks',
     'agent_steps', 'agent_artifacts', 'squad_events',
     'decision_checkpoints', 'memory_proposals', 'recommendation_sets',
-    'trip_drafts', 'agent_command_idempotency_keys'
-  ); -- expected: 12
+    'trip_drafts', 'agent_command_idempotency_keys', 'user_memories',
+    'recommendation_feedbacks'
+  ); -- expected: 14
 
 select count(*) as rls_table_count
 from pg_class c
@@ -19,15 +20,20 @@ where n.nspname = 'public'
     'squad_sessions', 'captain_commands', 'agent_plans', 'agent_tasks',
     'agent_steps', 'agent_artifacts', 'squad_events',
     'decision_checkpoints', 'memory_proposals', 'recommendation_sets',
-    'trip_drafts', 'agent_command_idempotency_keys'
+    'trip_drafts', 'agent_command_idempotency_keys', 'user_memories',
+    'recommendation_feedbacks'
   )
-  and c.relrowsecurity; -- expected: 12
+  and c.relrowsecurity; -- expected: 14
 
 select count(*) as captain_rpc_count
 from pg_proc p
 join pg_namespace n on n.oid = p.pronamespace
 where n.nspname = 'public'
-  and p.proname in ('submit_captain_command', 'get_squad_session_projection'); -- expected: 2
+  and p.proname in ('submit_captain_command', 'get_squad_session_projection',
+    'cancel_squad_session', 'list_squad_events', 'retry_agent_task',
+    'select_recommendation', 'reject_recommendation',
+    'submit_recommendation_feedback', 'resolve_memory_proposal',
+    'resolve_decision_checkpoint', 'apply_trip_draft'); -- expected: 11
 
 select count(*) as realtime_table_count
 from pg_publication p

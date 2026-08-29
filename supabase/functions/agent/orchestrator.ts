@@ -306,6 +306,11 @@ export async function runOrchestration(
 
   // ── Phase F：Present 汇总落库 ────────────────────────────────────
   await runPhase(deps, ctx, 'result_coordinator', 'present', async () => {
+    const placeIds = await persistPlaces(deps, usable);
+    ctx.recommendations = ctx.recommendations.map((item) => ({
+      ...item,
+      placeId: placeIds.get(item.name) ?? item.placeId,
+    }));
     const artifact = {
       session_id: ctx.sessionId,
       task_id: ctx.taskId,
@@ -588,7 +593,7 @@ async function appendEvent(
     p_visibility: 'captain',
   });
   if (error) {
-    console.error('append_squad_event failed:', error.message);
+    throw new OrchestrationError('event_write_failed', error.message);
   }
 }
 
