@@ -242,31 +242,37 @@ class AgentController extends ChangeNotifier {
     await refresh();
   });
 
-  Future<void> selectRecommendation(AgentRecommendationSet set) =>
-      _runOperation('select:${set.id}', () async {
-        final sessionId = _sessionId;
-        if (sessionId == null || set.items.isEmpty) return;
-        await repository.selectRecommendation(
-          sessionId: sessionId,
-          recommendationSetId: set.id,
-          placeNames: [
-            for (final item in set.items)
-              if (item['name'] is String) item['name'] as String,
-          ],
-        );
-        await refresh();
-      });
+  Future<void> selectRecommendation(AgentRecommendationSet set) {
+    if (!set.canCaptainDecide) return Future<void>.value();
+    final sessionId = _sessionId;
+    if (sessionId == null || set.items.isEmpty) return Future<void>.value();
+    return _runOperation('recommendation:${set.id}', () async {
+      if (_sessionId != sessionId) return;
+      await repository.selectRecommendation(
+        sessionId: sessionId,
+        recommendationSetId: set.id,
+        placeNames: [
+          for (final item in set.items)
+            if (item['name'] is String) item['name'] as String,
+        ],
+      );
+      if (_sessionId == sessionId) await refresh();
+    });
+  }
 
-  Future<void> rejectRecommendation(AgentRecommendationSet set) =>
-      _runOperation('reject:${set.id}', () async {
-        final sessionId = _sessionId;
-        if (sessionId == null) return;
-        await repository.rejectRecommendation(
-          sessionId: sessionId,
-          recommendationSetId: set.id,
-        );
-        await refresh();
-      });
+  Future<void> rejectRecommendation(AgentRecommendationSet set) {
+    if (!set.canCaptainDecide) return Future<void>.value();
+    final sessionId = _sessionId;
+    if (sessionId == null) return Future<void>.value();
+    return _runOperation('recommendation:${set.id}', () async {
+      if (_sessionId != sessionId) return;
+      await repository.rejectRecommendation(
+        sessionId: sessionId,
+        recommendationSetId: set.id,
+      );
+      if (_sessionId == sessionId) await refresh();
+    });
+  }
 
   Future<void> retryTask(AgentTask task) =>
       _runOperation('retry:${task.id}', () async {
@@ -439,7 +445,11 @@ class AgentController extends ChangeNotifier {
           },
         )
         .subscribe((status, [error]) {
-          if (_isDisposed || generation != _lifecycleGeneration || _sessionId != sessionId) return;
+          if (_isDisposed ||
+              generation != _lifecycleGeneration ||
+              _sessionId != sessionId) {
+            return;
+          }
           if (status == RealtimeSubscribeStatus.subscribed) {
             _error = null;
             notifyListeners();

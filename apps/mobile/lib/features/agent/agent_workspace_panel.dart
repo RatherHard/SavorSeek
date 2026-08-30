@@ -165,33 +165,41 @@ class _RecommendationTile extends StatelessWidget {
   final AgentRecommendationSet set;
 
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      ListTile(
-        dense: true,
-        leading: const Icon(Icons.restaurant_outlined),
-        title: Text('${set.items.length} 条推荐'),
-        subtitle: Text(
-          set.items.take(2).map((item) => '${item['name'] ?? '地点'}').join('、'),
+  Widget build(BuildContext context) {
+    final canDecide = set.canCaptainDecide;
+    return Column(
+      children: [
+        ListTile(
+          dense: true,
+          leading: const Icon(Icons.restaurant_outlined),
+          title: Text('${set.items.length} 条推荐'),
+          subtitle: Text(
+            '${_recommendationStatusLabel(set.status)}\n'
+            '${set.items.take(2).map((item) => '${item['name'] ?? '地点'}').join('、')}',
+          ),
         ),
-      ),
-      Row(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          TextButton.icon(
-            onPressed: () => controller.selectRecommendation(set),
-            icon: const Icon(Icons.check),
-            label: const Text('选择'),
-          ),
-          TextButton.icon(
-            onPressed: () => controller.rejectRecommendation(set),
-            icon: const Icon(Icons.close),
-            label: const Text('拒绝'),
-          ),
-        ],
-      ),
-    ],
-  );
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            TextButton.icon(
+              onPressed: canDecide
+                  ? () => controller.selectRecommendation(set)
+                  : null,
+              icon: const Icon(Icons.check),
+              label: const Text('选择'),
+            ),
+            TextButton.icon(
+              onPressed: canDecide
+                  ? () => controller.rejectRecommendation(set)
+                  : null,
+              icon: const Icon(Icons.close),
+              label: const Text('拒绝'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
 }
 
 class _DecisionTile extends StatelessWidget {
@@ -342,6 +350,17 @@ class _MemoryProposalTile extends StatelessWidget {
     );
   }
 }
+
+String _recommendationStatusLabel(String status) => switch (status) {
+  'draft' => '草稿',
+  'generated' => '已生成，等待队长决定',
+  'displayed' => '已展示，等待队长决定',
+  'captain_selected' => '队长已选择',
+  'rejected' => '已拒绝',
+  'expired' => '已过期',
+  'added_to_trip' => '已加入行程',
+  _ => status,
+};
 
 String _statusLabel(String status) => switch (status) {
   'receiving_command' => '正在接收指令',
