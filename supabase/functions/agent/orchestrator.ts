@@ -188,11 +188,20 @@ async function runOrchestrationInternal(
     const query = buildSearchQuery(ctx, viewport);
     await updatePhaseProgress(deps, ctx, phaseTaskId, 25, '正在检索地图地点');
     const places = await searchAmapPlaces(query, requireAmapKey(), signal);
+    if (signal.aborted) throw new PhaseTimeoutError();
     ctx.candidates = places as PlaceCandidate[];
     await updatePhaseProgress(deps, ctx, phaseTaskId, 80, '地点检索完成');
     if (ctx.candidates.length === 0) {
       return { summary: '当前区域没有找到候选地点', complete: false };
     }
+    return {
+      summary: `找到 ${ctx.candidates.length} 个候选地点`,
+      complete: true,
+      artifact: {
+        type: 'place_candidates',
+        payload: { candidates: ctx.candidates },
+      },
+    };
   }, PHASE_TIMEOUT_MS.map);
   if (mapOutcome.fatal || mapOutcome.status === 'timed_out') return;
   if (await checkCancelled(deps, sessionId)) return;
@@ -290,7 +299,8 @@ async function runOrchestrationInternal(
         const mode = tripRow['default_travel_mode'] === 'driving' ? 'driving' :
           tripRow['default_travel_mode'] === 'cycling' ? 'bicycling' : 'walking';
         routePath = await resolveRoute(routePoints, mode as TravelMode, requireAmapKey(), signal);
-      } catch (_error) {
+      } catch (error) {
+        if (signal.aborted) throw new PhaseTimeoutError();
         plannedRoute.warnings.push('路线服务不可用，当前仅保留地点顺序和估算时间');
       }
       const placeIds = await persistPlaces(deps, usable);
@@ -532,6 +542,19 @@ async function runPhase(
     let timer: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
     const workPromise = work(controller.signal, taskId);
+    const attemptPromise = workPromise.then(async (result) => {
+      if (timedOut || controller.signal.aborted) throw new PhaseTimeoutError();
+      await persistPhaseResult(
+        deps,
+        ctx,
+        taskId,
+        role,
+        result.summary,
+        result.complete,
+        result.artifact,
+      );
+      return result;
+    });
     const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         timedOut = true;
@@ -541,44 +564,14 @@ async function runPhase(
     });
 
     try {
-      const { summary, complete, artifact } = await Promise.race([workPromise, timeoutPromise]);
+      const { summary, complete, artifact } = await Promise.race([attemptPromise, timeoutPromise]);
       if (timedOut || controller.signal.aborted) throw new PhaseTimeoutError();
-      if (artifact) {
-        const { data: artifactRow, error: artifactError } = await deps.serviceClient
-          .from('agent_artifacts')
-          .insert({
-            session_id: ctx.sessionId,
-            task_id: taskId,
-            schema_version: 1,
-            artifact_type: artifact.type,
-            producer: role,
-            payload: artifact.payload,
-            confidence: artifact.confidence ?? null,
-            warnings: [],
-            requires_captain_approval: false,
-            is_captain_visible: true,
-          })
-          .select('id')
-          .single();
-        if (artifactError) throw new OrchestrationError('artifact_write_failed', artifactError.message);
-        await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, 'artifact.created', {
-          artifactId: (artifactRow as Record<string, unknown>)['id'],
-          artifactType: artifact.type,
-        });
-      }
-      await deps.serviceClient.from('agent_tasks').update({
-        status: complete ? 'succeeded' : 'partial',
-        user_summary: summary,
-        finished_at: new Date().toISOString(),
-        progress: complete ? 100 : 60,
-      }).eq('id', taskId);
-      await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, complete ? 'task.succeeded' : 'task.partial', { summary, role });
       return { status: complete ? 'succeeded' : 'partial', fatal: false, taskId };
     } catch (error) {
       lastTimedOut = error instanceof PhaseTimeoutError;
       lastErrorCode = lastTimedOut ? `${phaseName}_timeout` : `${phaseName}_failed`;
       console.error(`[${phaseName}] attempt failed:`, lastErrorCode);
-      void workPromise.catch((lateError) => {
+      void attemptPromise.catch((lateError) => {
         console.error(`[${phaseName}] late attempt failed:`, lateError instanceof Error ? lateError.message : String(lateError));
       });
     } finally {
@@ -613,6 +606,48 @@ async function runPhase(
   });
   if (!fatal && !lastTimedOut) ctx.degraded.push(`${phaseName} 降级`);
   return { status, fatal: fatal || lastTimedOut, taskId, errorCode: lastErrorCode };
+}
+
+async function persistPhaseResult(
+  deps: OrchestrationDeps,
+  ctx: OrchestrationContext,
+  taskId: string,
+  role: AgentRole,
+  summary: string,
+  complete: boolean,
+  artifact: PhaseResult['artifact'],
+): Promise<void> {
+  if (artifact) {
+    const { data: artifactRow, error: artifactError } = await deps.serviceClient
+      .from('agent_artifacts')
+      .insert({
+        session_id: ctx.sessionId,
+        task_id: taskId,
+        schema_version: 1,
+        artifact_type: artifact.type,
+        producer: role,
+        payload: artifact.payload,
+        confidence: artifact.confidence ?? null,
+        warnings: [],
+        requires_captain_approval: false,
+        is_captain_visible: true,
+      })
+      .select('id')
+      .single();
+    if (artifactError) throw new OrchestrationError('artifact_write_failed', artifactError.message);
+    await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, 'artifact.created', {
+      artifactId: (artifactRow as Record<string, unknown>)['id'],
+      artifactType: artifact.type,
+    });
+  }
+  const { error: taskError } = await deps.serviceClient.from('agent_tasks').update({
+    status: complete ? 'succeeded' : 'partial',
+    user_summary: summary,
+    finished_at: new Date().toISOString(),
+    progress: complete ? 100 : 60,
+  }).eq('id', taskId);
+  if (taskError) throw new OrchestrationError('task_finalize_failed', taskError.message);
+  await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, complete ? 'task.succeeded' : 'task.partial', { summary, role });
 }
 
 async function createTask(
