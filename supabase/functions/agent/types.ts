@@ -49,7 +49,8 @@ export type SquadEventType =
   | 'session.completed'
   | 'session.partially_completed'
   | 'session.failed'
-  | 'session.cancelled';
+  | 'session.cancelled'
+  | 'memory.proposed';
 
 /** 需求理解输出的结构化约束。缺省项显式为 null（成功标准：缺省不丢失）。 */
 export interface ParsedIntent {

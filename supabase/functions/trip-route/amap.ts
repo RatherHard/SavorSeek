@@ -86,15 +86,20 @@ export async function resolveRoute(
   points: GeoPoint[],
   mode: TravelMode,
   key: string,
+  signal?: AbortSignal,
 ): Promise<GeoPoint[]> {
   const path: GeoPoint[] = [];
 
   for (let index = 0; index < points.length - 1; index++) {
+    if (signal?.aborted) {
+      throw new TripRouteError('provider_unavailable', '路线规划已取消。', 'request aborted');
+    }
     const segment = await fetchSegment(
       points[index],
       points[index + 1],
       mode,
       key,
+      signal,
     );
     // 相邻段的首尾是同一个点，去重避免折线上出现重复顶点。
     if (path.length > 0 && segment.length > 0) segment.shift();
@@ -109,6 +114,7 @@ async function fetchSegment(
   destination: GeoPoint,
   mode: TravelMode,
   key: string,
+  signal?: AbortSignal,
 ): Promise<GeoPoint[]> {
   const url = new URL(`${AMAP_BASE}/${mode}`);
   const params = url.searchParams;
@@ -120,17 +126,21 @@ async function fetchSegment(
   // 驾车策略 0 = 速度优先；步行与骑行接口忽略该参数。
   if (mode === 'driving') params.set('strategy', '0');
 
-  const payload = await fetchAmap(url);
+  const payload = await fetchAmap(url, signal);
   assertAmapOk(payload);
   return parsePolyline(payload.route);
 }
 
-async function fetchAmap(url: URL): Promise<AmapResponse> {
+async function fetchAmap(url: URL, signal?: AbortSignal): Promise<AmapResponse> {
   // AbortSignal.timeout 而非手工 setTimeout：后者忘记 clearTimeout 会让
   // Deno worker 因悬挂定时器延迟回收。
   let response: Response;
   try {
-    response = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const timeoutSignal = AbortSignal.timeout(TIMEOUT_MS);
+    const combinedSignal = signal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : timeoutSignal;
+    response = await fetch(url, { signal: combinedSignal });
   } catch (error) {
     const isTimeout = error instanceof DOMException &&
       error.name === 'TimeoutError';
