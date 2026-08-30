@@ -57,7 +57,11 @@ class _FakeAgentRepository implements AgentRepository {
   AgentRepositoryException? submitError;
   Completer<AgentWorkspaceSnapshot>? submitGate;
   String? submittedRequestId;
-
+  final List<AgentMemoryProposal> memoryProposals = [];
+  String? memoryProposalId;
+  String? memoryDecision;
+  Map<String, dynamic>? memoryEditedValue;
+  AgentRepositoryException? memoryProposalError;
   @override
   Future<AgentWorkspaceSnapshot> submit({
     required String rawText,
@@ -120,6 +124,20 @@ class _FakeAgentRepository implements AgentRepository {
     int? expectedRevision,
     String? idempotencyKey,
   }) async => calls.add('resolve');
+
+  @override
+  Future<void> resolveMemoryProposal({
+    required String proposalId,
+    required String decision,
+    Map<String, dynamic>? editedValue,
+  }) async {
+    final error = memoryProposalError;
+    if (error != null) throw error;
+    memoryProposalId = proposalId;
+    memoryDecision = decision;
+    memoryEditedValue = editedValue;
+    calls.add('memory:$decision');
+  }
 
   @override
   Future<void> applyDraft({
@@ -224,6 +242,40 @@ void main() {
       await Future.wait([first, second]);
 
       expect(repository.calls.where((call) => call == 'select'), hasLength(1));
+    },
+  );
+
+  test(
+    'resolves a pending memory proposal and refreshes the session',
+    () async {
+      repository.snapshots.add(snapshot('session-1', 1));
+      await controller.submit('找晚餐');
+      final proposal = AgentMemoryProposal(
+        id: 'proposal-1',
+        sessionId: 'session-1',
+        operation: 'create',
+        memoryKey: 'avoid',
+        proposedValue: const {
+          'items': ['海鲜'],
+        },
+        status: 'proposed',
+      );
+
+      repository.snapshots.add(snapshot('session-1', 2));
+      await controller.resolveMemoryProposal(
+        proposal,
+        'edit',
+        editedValue: const {
+          'items': ['海鲜', '香菜'],
+        },
+      );
+
+      expect(repository.memoryProposalId, 'proposal-1');
+      expect(repository.memoryDecision, 'edit');
+      expect(repository.memoryEditedValue, {
+        'items': ['海鲜', '香菜'],
+      });
+      expect(repository.calls, contains('memory:edit'));
     },
   );
 

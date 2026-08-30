@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:savorseek/features/agent/agent_controller.dart';
+import 'package:savorseek/features/agent/agent_memory_proposal_sheet.dart';
 import 'package:savorseek/features/agent/agent_models.dart';
 
 class AgentWorkspacePanel extends StatelessWidget {
@@ -124,6 +125,8 @@ class _SessionView extends StatelessWidget {
                   decision: decision,
                   fallbackRevision: tripRevision,
                 ),
+              for (final proposal in snapshot.pendingMemoryProposals)
+                _MemoryProposalTile(controller: controller, proposal: proposal),
             ],
           ),
         ),
@@ -238,6 +241,104 @@ class _DecisionTile extends StatelessWidget {
               ),
             ),
       ],
+    );
+  }
+}
+
+class _MemoryProposalTile extends StatelessWidget {
+  const _MemoryProposalTile({required this.controller, required this.proposal});
+
+  final AgentController controller;
+  final AgentMemoryProposal proposal;
+
+  @override
+  Widget build(BuildContext context) {
+    final isBusy = controller.isMemoryProposalInFlight(proposal.id);
+    final value = _summary;
+    return Card(
+      margin: const EdgeInsets.only(top: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.lightbulb_outline),
+              title: const Text('记忆提案'),
+              subtitle: Text('$_operationLabel：$value'),
+            ),
+            if (proposal.confidence != null)
+              Text(
+                '置信度 ${(proposal.confidence! * 100).round()}%',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            if (!proposal.isEditable &&
+                proposal.memoryKey != 'avoid' &&
+                proposal.memoryKey != 'budget_per_person')
+              const Text('此类型暂不支持编辑。'),
+            if (proposal.isPending)
+              Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 4,
+                children: [
+                  TextButton(
+                    onPressed: isBusy
+                        ? null
+                        : () => controller.resolveMemoryProposal(
+                            proposal,
+                            'accept',
+                          ),
+                    child: const Text('保存'),
+                  ),
+                  TextButton(
+                    onPressed: isBusy
+                        ? null
+                        : () => controller.resolveMemoryProposal(
+                            proposal,
+                            'reject',
+                          ),
+                    child: const Text('拒绝'),
+                  ),
+                  if (proposal.isEditable)
+                    TextButton(
+                      onPressed: isBusy ? null : () => _edit(context),
+                      child: const Text('编辑'),
+                    ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String get _operationLabel => switch (proposal.operation) {
+    'create' => '建议保存',
+    'update' => '建议更新',
+    'delete' => '建议删除',
+    _ => '建议处理',
+  };
+
+  String get _summary {
+    final value = proposal.proposedValue;
+    if (proposal.memoryKey == 'avoid' && value['items'] is List) {
+      return (value['items'] as List).whereType<String>().join('、');
+    }
+    if (proposal.memoryKey == 'budget_per_person' && value['maxMinor'] is num) {
+      return '${(value['maxMinor'] as num) / 100} 元';
+    }
+    return proposal.memoryKey;
+  }
+
+  Future<void> _edit(BuildContext context) async {
+    final editedValue = await showMemoryProposalEditor(context, proposal);
+    if (editedValue == null || !context.mounted) return;
+    await controller.resolveMemoryProposal(
+      proposal,
+      'edit',
+      editedValue: editedValue,
     );
   }
 }

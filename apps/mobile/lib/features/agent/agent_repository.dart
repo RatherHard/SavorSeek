@@ -36,6 +36,13 @@ abstract interface class AgentRepository {
     int? expectedRevision,
     String? idempotencyKey,
   });
+
+  Future<void> resolveMemoryProposal({
+    required String proposalId,
+    required String decision,
+    Map<String, dynamic>? editedValue,
+  });
+
   Future<void> applyDraft({
     required String draftId,
     required int expectedRevision,
@@ -90,6 +97,13 @@ class UnavailableAgentRepository implements AgentRepository {
     required String optionId,
     int? expectedRevision,
     String? idempotencyKey,
+  }) => _fail();
+
+  @override
+  Future<void> resolveMemoryProposal({
+    required String proposalId,
+    required String decision,
+    Map<String, dynamic>? editedValue,
   }) => _fail();
 
   @override
@@ -226,6 +240,24 @@ class SupabaseAgentRepository implements AgentRepository {
     }
     if (idempotencyKey != null) {
       body['idempotencyKey'] = idempotencyKey;
+    }
+    await _invoke(body);
+  }
+
+  @override
+  Future<void> resolveMemoryProposal({
+    required String proposalId,
+    required String decision,
+    Map<String, dynamic>? editedValue,
+  }) async {
+    _requireSession();
+    final body = <String, dynamic>{
+      'command': 'memory_proposal_decision',
+      'proposalId': proposalId,
+      'decision': decision,
+    };
+    if (decision == 'edit' && editedValue != null) {
+      body['editedValue'] = editedValue;
     }
     await _invoke(body);
   }

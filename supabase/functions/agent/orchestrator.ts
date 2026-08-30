@@ -402,7 +402,7 @@ async function proposeMemoryFromIntent(deps: OrchestrationDeps, ctx: Orchestrati
   if (proposals.length === 0) return;
 
   for (const proposal of proposals) {
-    const { error } = await deps.serviceClient.from('memory_proposals').upsert({
+    const { data: proposalRow, error } = await deps.serviceClient.from('memory_proposals').upsert({
       session_id: ctx.sessionId,
       task_id: ctx.taskId,
       user_id: ctx.userId,
@@ -411,11 +411,12 @@ async function proposeMemoryFromIntent(deps: OrchestrationDeps, ctx: Orchestrati
       proposed_value: proposal.value,
       confidence: proposal.confidence,
       status: 'proposed',
-    }, { onConflict: 'session_id,memory_key', ignoreDuplicates: true });
+    }, { onConflict: 'session_id,memory_key', ignoreDuplicates: true }).select('id').maybeSingle();
     if (error) {
       console.error('memory proposal insert failed:', error.message);
       continue;
     }
+    if (!proposalRow) continue;
     await appendEvent(deps, ctx.sessionId, ctx.commandId, null, 'memory.proposed', {
       memoryKey: proposal.memoryKey,
       value: proposal.value,

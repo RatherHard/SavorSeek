@@ -59,6 +59,21 @@ void main() {
         'decisions': [
           {'id': 'decision-1', 'status': 'pending', 'question': '是否应用？'},
         ],
+        'memory_proposals': [
+          {
+            'id': 'proposal-1',
+            'session_id': 'session-1',
+            'operation': 'create',
+            'memory_key': 'avoid',
+            'proposed_value': {
+              'items': ['海鲜'],
+              'note': '来自队长指令',
+            },
+            'evidence_refs': ['evidence-1'],
+            'confidence': 0.9,
+            'status': 'proposed',
+          },
+        ],
       });
 
       expect(snapshot.session?.status, 'working');
@@ -66,6 +81,14 @@ void main() {
       expect(snapshot.recommendations.single.items.single['name'], '甲店');
       expect(snapshot.events.single.type, 'task.started');
       expect(snapshot.awaitingDecision, isTrue);
+      expect(snapshot.memoryProposals.single.memoryKey, 'avoid');
+      expect(snapshot.memoryProposals.single.isPending, isTrue);
+      expect(snapshot.memoryProposals.single.isEditable, isTrue);
+      expect(
+        () => (snapshot.memoryProposals.single.proposedValue['items'] as List)
+            .add('花生'),
+        throwsUnsupportedError,
+      );
     },
   );
 
@@ -76,6 +99,7 @@ void main() {
     expect(snapshot.recommendations, isEmpty);
     expect(snapshot.events, isEmpty);
     expect(snapshot.decisions, isEmpty);
+    expect(snapshot.memoryProposals, isEmpty);
     expect(snapshot.awaitingDecision, isFalse);
   });
 }
