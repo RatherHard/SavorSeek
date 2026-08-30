@@ -225,6 +225,16 @@ void main() {
     expect(find.text('记忆提案'), findsOneWidget);
     expect(find.text('保存'), findsOneWidget);
     expect(find.textContaining('海鲜'), findsOneWidget);
+    expect(find.byTooltip('收起 Agent 小队'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('收起 Agent 小队'));
+    await tester.pumpAndSettle();
+    expect(find.text('记忆提案'), findsNothing);
+    expect(find.byTooltip('展开 Agent 小队'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('展开 Agent 小队'));
+    await tester.pumpAndSettle();
+    expect(find.text('记忆提案'), findsOneWidget);
 
     await tester.tap(find.text('保存'));
     await tester.pump();

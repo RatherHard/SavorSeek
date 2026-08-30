@@ -1,10 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import 'package:savorseek/app/theme/design_tokens.dart';
 import 'package:savorseek/features/agent/agent_controller.dart';
 import 'package:savorseek/features/agent/agent_memory_proposal_sheet.dart';
 import 'package:savorseek/features/agent/agent_models.dart';
 
-class AgentWorkspacePanel extends StatelessWidget {
+class AgentWorkspacePanel extends StatefulWidget {
   const AgentWorkspacePanel({
     super.key,
     required this.controller,
@@ -15,41 +18,146 @@ class AgentWorkspacePanel extends StatelessWidget {
   final int? tripRevision;
 
   @override
+  State<AgentWorkspacePanel> createState() => _AgentWorkspacePanelState();
+}
+
+class _AgentWorkspacePanelState extends State<AgentWorkspacePanel> {
+  bool _isExpanded = true;
+  Timer? _collapseTimer;
+
+  @override
+  void dispose() {
+    _collapseTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
     final snapshot = controller.snapshot;
     if (!controller.hasSession && controller.error == null) {
       return const SizedBox.shrink();
     }
-    return Align(
-      alignment: Alignment.topRight,
-      child: Card(
-        margin: const EdgeInsets.all(12),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 360, maxHeight: 320),
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableWidth = constraints.hasBoundedWidth
+            ? (constraints.maxWidth - 24).clamp(48.0, double.infinity)
+            : 360.0;
+        final expandedWidth = availableWidth.clamp(48.0, 360.0);
+        final expandedHeight = constraints.hasBoundedHeight
+            ? (constraints.maxHeight - 24).clamp(48.0, 320.0)
+            : 320.0;
+        final panelWidth = _isExpanded ? expandedWidth : 52.0;
+        final panelHeight = _isExpanded ? expandedHeight : 52.0;
+
+        return Align(
+          alignment: Alignment.topRight,
           child: Padding(
             padding: const EdgeInsets.all(12),
-            child: controller.error != null
-                ? _ErrorView(controller: controller)
-                : _SessionView(
-                    controller: controller,
-                    snapshot: snapshot,
-                    tripRevision: tripRevision,
-                  ),
+            child: AnimatedContainer(
+              duration: AppTokens.durationNormal,
+              curve: Curves.easeOut,
+              width: panelWidth,
+              height: panelHeight,
+              child: ClipRect(
+                child: _isExpanded
+                    ? OverflowBox(
+                        alignment: Alignment.topRight,
+                        minWidth: expandedWidth,
+                        maxWidth: expandedWidth,
+                        minHeight: expandedHeight,
+                        maxHeight: expandedHeight,
+                        child: Card(
+                          margin: EdgeInsets.zero,
+                          clipBehavior: Clip.antiAlias,
+                          child: _ExpandedPanel(
+                            controller: controller,
+                            snapshot: snapshot,
+                            tripRevision: widget.tripRevision,
+                            onCollapse: () =>
+                                setState(() => _isExpanded = false),
+                          ),
+                        ),
+                      )
+                    : Card(
+                        margin: EdgeInsets.zero,
+                        clipBehavior: Clip.antiAlias,
+                        child: _CollapsedPanel(
+                          onExpand: () => setState(() => _isExpanded = true),
+                        ),
+                      ),
+              ),
+            ),
           ),
-        ),
+        );
+      },
+    );
+  }
+}
+
+class _CollapsedPanel extends StatelessWidget {
+  const _CollapsedPanel({required this.onExpand});
+
+  final VoidCallback onExpand;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label: '展开 Agent 小队',
+    child: Center(
+      child: IconButton(
+        onPressed: onExpand,
+        icon: const Icon(Icons.groups_outlined),
+        tooltip: '展开 Agent 小队',
       ),
+    ),
+  );
+}
+
+class _ExpandedPanel extends StatelessWidget {
+  const _ExpandedPanel({
+    required this.controller,
+    required this.snapshot,
+    required this.tripRevision,
+    required this.onCollapse,
+  });
+
+  final AgentController controller;
+  final AgentWorkspaceSnapshot snapshot;
+  final int? tripRevision;
+  final VoidCallback onCollapse;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: controller.error != null
+          ? _ErrorView(controller: controller, onCollapse: onCollapse)
+          : _SessionView(
+              controller: controller,
+              snapshot: snapshot,
+              tripRevision: tripRevision,
+              onCollapse: onCollapse,
+            ),
     );
   }
 }
 
 class _ErrorView extends StatelessWidget {
-  const _ErrorView({required this.controller});
+  const _ErrorView({required this.controller, required this.onCollapse});
   final AgentController controller;
+  final VoidCallback onCollapse;
 
   @override
   Widget build(BuildContext context) => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
+      IconButton(
+        onPressed: onCollapse,
+        icon: const Icon(Icons.chevron_right),
+        tooltip: '收起 Agent 小队',
+      ),
       Expanded(
         child: Text(
           controller.error ?? 'Agent 暂不可用，请稍后重试。',
@@ -77,10 +185,12 @@ class _SessionView extends StatelessWidget {
     required this.controller,
     required this.snapshot,
     this.tripRevision,
+    required this.onCollapse,
   });
   final AgentController controller;
   final AgentWorkspaceSnapshot snapshot;
   final int? tripRevision;
+  final VoidCallback onCollapse;
 
   @override
   Widget build(BuildContext context) {
@@ -95,6 +205,11 @@ class _SessionView extends StatelessWidget {
                 session?.title ?? 'Agent 小队',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
+            ),
+            IconButton(
+              onPressed: onCollapse,
+              icon: const Icon(Icons.chevron_right),
+              tooltip: '收起 Agent 小队',
             ),
             if (session?.status == 'working' ||
                 session?.status == 'dispatching')
