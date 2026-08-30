@@ -46,6 +46,9 @@ class AgentController extends ChangeNotifier {
   bool get hasSession => _sessionId != null;
   bool get canRetrySubmit => _lastFailedSubmission != null && !_isSubmitting;
 
+  bool isMemoryProposalInFlight(String proposalId) => _inFlightOperations.any(
+    (operation) => operation.startsWith('memory:$proposalId:'),
+  );
   Future<void> submit(
     String text, {
     AgentSubmitContext context = const AgentSubmitContext(),
@@ -79,8 +82,8 @@ class AgentController extends ChangeNotifier {
     await _submitWithRequest(
       trimmed,
       requestId: requestId,
-      context: context,
-      constraints: constraints,
+      context: stableContext,
+      constraints: stableConstraints,
       taskType: taskType,
       signature: signature,
     );
@@ -295,6 +298,43 @@ class AgentController extends ChangeNotifier {
         idempotencyKey: idempotencyKey,
       );
       _operationIdempotencyKeys.remove(operation);
+      await refresh();
+    });
+  }
+
+  Future<void> resolveMemoryProposal(
+    AgentMemoryProposal proposal,
+    String decision, {
+    Map<String, dynamic>? editedValue,
+  }) {
+    if (!proposal.isPending ||
+        proposal.sessionId != _sessionId ||
+        isMemoryProposalInFlight(proposal.id) ||
+        !const {'accept', 'reject', 'edit'}.contains(decision)) {
+      return Future<void>.value();
+    }
+    if (decision == 'edit' &&
+        (editedValue == null ||
+            !proposal.isEditable ||
+            !AgentMemoryProposal.isValidValue(
+              proposal.memoryKey,
+              editedValue,
+            ))) {
+      return Future<void>.value();
+    }
+    if (decision != 'edit' && editedValue != null) {
+      return Future<void>.value();
+    }
+    final stableEditedValue = editedValue == null
+        ? null
+        : _copyMap(editedValue);
+    final operation = 'memory:${proposal.id}:$decision';
+    return _runOperation(operation, () async {
+      await repository.resolveMemoryProposal(
+        proposalId: proposal.id,
+        decision: decision,
+        editedValue: stableEditedValue,
+      );
       await refresh();
     });
   }
