@@ -108,9 +108,10 @@ export type AmapQuery = TextSearchQuery | AroundSearchQuery;
 export async function searchAmapPlaces(
   query: AmapQuery,
   key: string,
+  signal?: AbortSignal,
 ): Promise<NormalizedPlace[]> {
   const url = buildUrl(query, key);
-  const payload = await fetchAmap(url);
+  const payload = await fetchAmap(url, signal);
   assertAmapOk(payload);
   return normalizePois(payload.pois);
 }
@@ -144,12 +145,16 @@ function buildUrl(query: AmapQuery, key: string): URL {
   return url;
 }
 
-async function fetchAmap(url: URL): Promise<AmapResponse> {
+async function fetchAmap(url: URL, signal?: AbortSignal): Promise<AmapResponse> {
   // AbortSignal.timeout 而非手工 setTimeout：后者忘记 clearTimeout 会让
   // Deno worker 因悬挂定时器延迟回收。
   let response: Response;
   try {
-    response = await fetch(url, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+    const timeoutSignal = AbortSignal.timeout(TIMEOUT_MS);
+    const combinedSignal = signal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : timeoutSignal;
+    response = await fetch(url, { signal: combinedSignal });
   } catch (error) {
     const isTimeout = error instanceof DOMException &&
       error.name === 'TimeoutError';

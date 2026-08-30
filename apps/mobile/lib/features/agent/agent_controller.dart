@@ -423,6 +423,7 @@ class AgentController extends ChangeNotifier {
   Future<void> _subscribe(String sessionId) async {
     final supabase = client;
     if (supabase == null || _isDisposed) return;
+    final generation = _lifecycleGeneration;
     _channel = supabase
         .channel('agent-session-$sessionId')
         .onPostgresChanges(
@@ -437,7 +438,19 @@ class AgentController extends ChangeNotifier {
             unawaited(refresh());
           },
         )
-        .subscribe();
+        .subscribe((status, [error]) {
+          if (_isDisposed || generation != _lifecycleGeneration || _sessionId != sessionId) return;
+          if (status == RealtimeSubscribeStatus.subscribed) {
+            _error = null;
+            notifyListeners();
+            unawaited(refresh());
+          } else if (status == RealtimeSubscribeStatus.channelError ||
+              status == RealtimeSubscribeStatus.timedOut ||
+              status == RealtimeSubscribeStatus.closed) {
+            _error = 'Agent 实时同步已断开，请刷新重试。';
+            notifyListeners();
+          }
+        });
   }
 
   Future<void> _unsubscribe() async {

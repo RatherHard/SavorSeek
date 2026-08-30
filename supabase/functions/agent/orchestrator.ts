@@ -51,7 +51,43 @@ interface PhaseResult {
   };
 }
 
+interface PhaseOutcome {
+  status: 'succeeded' | 'partial' | 'failed' | 'timed_out';
+  fatal: boolean;
+  taskId: string;
+  errorCode?: string;
+}
+
+type PhaseWork = (signal: AbortSignal, phaseTaskId: string) => Promise<PhaseResult>;
+
+class PhaseTimeoutError extends Error {
+  constructor() {
+    super('phase timeout');
+    this.name = 'PhaseTimeoutError';
+  }
+}
+
 export async function runOrchestration(
+  serviceClient: SupabaseClient,
+  userId: string,
+  sessionId: string,
+  commandId: string,
+  taskId: string,
+): Promise<void> {
+  try {
+    await runOrchestrationInternal(serviceClient, userId, sessionId, commandId, taskId);
+  } catch (error) {
+    console.error('orchestration failed:', error instanceof Error ? error.message : String(error));
+    await finalizeTopLevelFailure(
+      { serviceClient, userId, planId: '' },
+      sessionId,
+      commandId,
+      taskId,
+    );
+  }
+}
+
+async function runOrchestrationInternal(
   serviceClient: SupabaseClient,
   userId: string,
   sessionId: string,
@@ -66,7 +102,7 @@ export async function runOrchestration(
     .eq('id', commandId)
     .single();
   if (!commandRow) {
-    await failSession(deps, sessionId, taskId, 'command_missing', '指令不存在');
+    await failSession(deps, sessionId, commandId, taskId, 'command_missing', '指令不存在');
     return;
   }
   const { data: planRow } = await serviceClient
@@ -76,7 +112,7 @@ export async function runOrchestration(
     .eq('session_id', sessionId)
     .single();
   if (!planRow) {
-    await failSession(deps, sessionId, taskId, 'plan_missing', '任务计划不存在');
+    await failSession(deps, sessionId, commandId, taskId, 'plan_missing', '任务计划不存在');
     return;
   }
   deps.planId = String(planRow['id']);
@@ -118,9 +154,9 @@ export async function runOrchestration(
 
   // ── Phase A（并行）：Intent + Memory ─────────────────────────────
   await Promise.all([
-    runPhase(deps, ctx, 'intent_interpreter', 'intent', async () => {
-      ctx.intent = parseCommandIntent(ctx.rawText, ctx.constraints, ctx.constraints);
-      await progress(deps, ctx, ctx.taskId, 'intent.normalized', {
+    runPhase(deps, ctx, 'intent_interpreter', 'intent', async (_signal, phaseTaskId) => {
+      ctx.intent = parseCommandIntent(ctx.rawText, ctx.context, ctx.constraints);
+      await progress(deps, ctx, phaseTaskId, 'intent.normalized', {
         city: ctx.intent.city,
         area: ctx.intent.area,
         mealPeriod: ctx.intent.mealPeriod,
@@ -129,7 +165,7 @@ export async function runOrchestration(
       });
       return { summary: intentSummary(ctx.intent), complete: true, artifact: { type: 'intent', payload: { intent: ctx.intent }, confidence: 1 } };
     }, PHASE_TIMEOUT_MS.intent),
-    runPhase(deps, ctx, 'preference_advisor', 'memory', async () => {
+    runPhase(deps, ctx, 'preference_advisor', 'memory', async (_signal, _phaseTaskId) => {
       const signals = await readMemorySignals(serviceClient, userId);
       ctx.memoryNotes = signals.favoriteNames.slice(0, 5);
       return {
@@ -143,20 +179,22 @@ export async function runOrchestration(
   ]);
   if (await checkCancelled(deps, sessionId)) return;
   if (ctx.intent === null) {
-    await failSession(deps, sessionId, taskId, 'intent_failed', '需求理解失败，无法继续');
+    await failSession(deps, sessionId, commandId, taskId, 'intent_failed', '需求理解失败，无法继续');
     return;
   }
 
   // ── Phase B：Map 召回候选 ────────────────────────────────────────
-  await runPhase(deps, ctx, 'map_explorer', 'map', async () => {
+  const mapOutcome = await runPhase(deps, ctx, 'map_explorer', 'map', async (signal, phaseTaskId) => {
     const query = buildSearchQuery(ctx, viewport);
-    const places = await searchAmapPlaces(query, requireAmapKey());
+    await updatePhaseProgress(deps, ctx, phaseTaskId, 25, '正在检索地图地点');
+    const places = await searchAmapPlaces(query, requireAmapKey(), signal);
     ctx.candidates = places as PlaceCandidate[];
+    await updatePhaseProgress(deps, ctx, phaseTaskId, 80, '地点检索完成');
     if (ctx.candidates.length === 0) {
       return { summary: '当前区域没有找到候选地点', complete: false };
     }
-    return { summary: `找到 ${ctx.candidates.length} 个候选地点`, complete: true, artifact: { type: 'place_candidates', payload: { candidates: ctx.candidates } } };
   }, PHASE_TIMEOUT_MS.map);
+  if (mapOutcome.fatal || mapOutcome.status === 'timed_out') return;
   if (await checkCancelled(deps, sessionId)) return;
 
   if (ctx.candidates.length === 0) {
@@ -165,7 +203,7 @@ export async function runOrchestration(
   }
 
   // ── Phase C：Fact 核验 ───────────────────────────────────────────
-  await runPhase(deps, ctx, 'fact_checker', 'fact', async () => {
+  await runPhase(deps, ctx, 'fact_checker', 'fact', async (_signal, _phaseTaskId) => {
     const signals = await readMemorySignals(serviceClient, userId);
     ctx.verified = verifyCandidates(ctx.candidates, signals);
     const usable = ctx.verified.filter((place) => place.latitude !== null).length;
@@ -184,7 +222,7 @@ export async function runOrchestration(
   }
 
   // ── Phase D：Recommend 排序 ──────────────────────────────────────
-  await runPhase(deps, ctx, 'recommendation_decider', 'recommend', async () => {
+  const recommendOutcome = await runPhase(deps, ctx, 'recommendation_decider', 'recommend', async (_signal, _phaseTaskId) => {
     const signals = await readMemorySignals(serviceClient, userId);
     const resultLimit = typeof ctx.constraints['resultLimit'] === 'number'
       ? Math.trunc(ctx.constraints['resultLimit'] as number)
@@ -196,6 +234,7 @@ export async function runOrchestration(
     });
     return { summary: `已生成 ${ctx.recommendations.length} 条推荐`, complete: true, artifact: { type: 'recommendation_set', payload: { items: ctx.recommendations } } };
   }, PHASE_TIMEOUT_MS.recommend);
+  if (recommendOutcome.fatal || recommendOutcome.status === 'timed_out') return;
   if (await checkCancelled(deps, sessionId)) return;
 
   // ── Phase E（可选）：Route 生成行程草案 ─────────────────────────
@@ -203,7 +242,7 @@ export async function runOrchestration(
     ctx.taskType === 'plan_route' ||
     ctx.taskType === 'replan_trip';
   if (wantRoute) {
-    await runPhase(deps, ctx, 'route_planner', 'route', async () => {
+    await runPhase(deps, ctx, 'route_planner', 'route', async (signal, _phaseTaskId) => {
       const route = planRoute(usable, ctx.recommendations, {
         startDate: nextDinnerDate(),
         startHour: 18,
@@ -250,7 +289,7 @@ export async function runOrchestration(
       try {
         const mode = tripRow['default_travel_mode'] === 'driving' ? 'driving' :
           tripRow['default_travel_mode'] === 'cycling' ? 'bicycling' : 'walking';
-        routePath = await resolveRoute(routePoints, mode as TravelMode, requireAmapKey());
+        routePath = await resolveRoute(routePoints, mode as TravelMode, requireAmapKey(), signal);
       } catch (_error) {
         plannedRoute.warnings.push('路线服务不可用，当前仅保留地点顺序和估算时间');
       }
@@ -305,7 +344,7 @@ export async function runOrchestration(
   }
 
   // ── Phase F：Present 汇总落库 ────────────────────────────────────
-  await runPhase(deps, ctx, 'result_coordinator', 'present', async () => {
+  const presentOutcome = await runPhase(deps, ctx, 'result_coordinator', 'present', async (_signal, _phaseTaskId) => {
     const placeIds = await persistPlaces(deps, usable);
     ctx.recommendations = ctx.recommendations.map((item) => ({
       ...item,
@@ -350,12 +389,20 @@ export async function runOrchestration(
       if (error) throw new OrchestrationError('present_write_failed', error.message);
     }
     return { summary: `已汇总 ${ctx.recommendations.length} 条推荐结果`, complete: true };
-  }, PHASE_TIMEOUT_MS.present);
+  }, PHASE_TIMEOUT_MS.present, { taskId: ctx.taskId });
+  if (presentOutcome.fatal || presentOutcome.status === 'timed_out') return;
 
   // ── 记忆提案：意图与忌口经队长确认后才写入长期记忆 ──────────────
   await proposeMemoryFromIntent(deps, ctx);
 
   // ── 会话收尾 ─────────────────────────────────────────────────────
+  const rootStatus = ctx.degraded.length > 0 ? 'partial' : 'succeeded';
+  await deps.serviceClient.from('agent_tasks').update({
+    status: rootStatus,
+    progress: rootStatus === 'succeeded' ? 100 : 60,
+    finished_at: new Date().toISOString(),
+    user_summary: rootStatus === 'succeeded' ? '队务官已完成全部工作' : '队务官已完成工作，但部分阶段降级',
+  }).eq('id', ctx.taskId);
   const partial = ctx.degraded.length > 0;
   const hasDraft = ctx.tripDraftId !== null;
   await deps.serviceClient.from('squad_sessions').update({
@@ -463,16 +510,39 @@ async function runPhase(
   ctx: OrchestrationContext,
   role: AgentRole,
   phaseName: string,
-  work: () => Promise<PhaseResult>,
+  work: PhaseWork,
   timeoutMs: number,
-): Promise<void> {
-  const taskId = await createTask(deps, ctx.sessionId, ctx.commandId, role);
-  const attempt = async (): Promise<boolean> => {
+  options: { taskId?: string } = {},
+): Promise<PhaseOutcome> {
+  const taskId = options.taskId ?? await createTask(deps, ctx.sessionId, ctx.commandId, role);
+  const fatal = phaseName === 'intent' || phaseName === 'map' || phaseName === 'recommend' || phaseName === 'present';
+  let lastErrorCode = `${phaseName}_failed`;
+  let lastTimedOut = false;
+
+  await deps.serviceClient.from('agent_tasks').update({
+    status: 'running',
+    started_at: new Date().toISOString(),
+    progress: 10,
+  }).eq('id', taskId);
+  await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, 'task.started', { role, phase: phaseName });
+  await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, 'task.progressed', { role, phase: phaseName, progress: 10 });
+
+  for (let attemptNumber = 0; attemptNumber < 2; attemptNumber++) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    const workPromise = work(controller.signal, taskId);
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+        reject(new PhaseTimeoutError());
+      }, timeoutMs);
+    });
+
     try {
-      const { summary, complete, artifact } = await work();
-      clearTimeout(timer);
+      const { summary, complete, artifact } = await Promise.race([workPromise, timeoutPromise]);
+      if (timedOut || controller.signal.aborted) throw new PhaseTimeoutError();
       if (artifact) {
         const { data: artifactRow, error: artifactError } = await deps.serviceClient
           .from('agent_artifacts')
@@ -503,45 +573,46 @@ async function runPhase(
         progress: complete ? 100 : 60,
       }).eq('id', taskId);
       await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, complete ? 'task.succeeded' : 'task.partial', { summary, role });
-      return true;
+      return { status: complete ? 'succeeded' : 'partial', fatal: false, taskId };
     } catch (error) {
-      clearTimeout(timer);
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[${phaseName}] attempt failed:`, message);
-      return false;
+      lastTimedOut = error instanceof PhaseTimeoutError;
+      lastErrorCode = lastTimedOut ? `${phaseName}_timeout` : `${phaseName}_failed`;
+      console.error(`[${phaseName}] attempt failed:`, lastErrorCode);
+      void workPromise.catch((lateError) => {
+        console.error(`[${phaseName}] late attempt failed:`, lateError instanceof Error ? lateError.message : String(lateError));
+      });
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
-  };
 
-  await deps.serviceClient.from('agent_tasks').update({ status: 'running', started_at: new Date().toISOString() }).eq('id', taskId);
-  await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, 'task.started', { role, phase: phaseName });
-  await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, 'task.progressed', { role, phase: phaseName, progress: 10 });
+    if (attemptNumber === 0) {
+      await deps.serviceClient.from('agent_tasks').update({ status: 'retrying', retry_count: 1 }).eq('id', taskId);
+    }
+  }
 
-  const firstOk = await attempt();
-  if (firstOk) return;
-
-  // 重试一次。
-  await deps.serviceClient.from('agent_tasks').update({ status: 'retrying', retry_count: 1 }).eq('id', taskId);
-  const secondOk = await attempt();
-  if (secondOk) return;
-
-  // 降级或终止。
-  const fatal = phaseName === 'intent' || phaseName === 'map' || phaseName === 'recommend' || phaseName === 'present';
+  const status = lastTimedOut ? 'timed_out' : (fatal ? 'failed' : 'partial');
+  if (fatal || lastTimedOut) {
+    await deps.serviceClient.from('agent_tasks').update({
+      status,
+      error_code: lastErrorCode,
+      user_summary: lastTimedOut ? `${phaseName} 阶段超时` : `${phaseName} 阶段失败`,
+      finished_at: new Date().toISOString(),
+    }).eq('id', taskId);
+    await failSession(deps, ctx.sessionId, ctx.commandId, taskId, lastErrorCode, lastTimedOut ? `${phaseName} 阶段超时` : `${phaseName} 阶段执行失败`);
+    return { status, fatal: true, taskId, errorCode: lastErrorCode };
+  }
   await deps.serviceClient.from('agent_tasks').update({
-    status: fatal ? 'failed' : 'partial',
-    user_summary: fatal ? `${phaseName} 阶段失败` : `${phaseName} 阶段降级跳过`,
-    error_code: `${phaseName}_failed`,
+    status,
+    user_summary: lastTimedOut ? `${phaseName} 阶段超时` : (fatal ? `${phaseName} 阶段失败` : `${phaseName} 阶段降级跳过`),
+    error_code: lastErrorCode,
     finished_at: new Date().toISOString(),
   }).eq('id', taskId);
-  await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, fatal ? 'task.failed' : 'task.partial', {
+  await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, fatal || lastTimedOut ? 'task.failed' : 'task.partial', {
     role,
-    summary: fatal ? `${phaseName} 阶段失败` : `${phaseName} 阶段降级跳过`,
+    summary: lastTimedOut ? `${phaseName} 阶段超时` : (fatal ? `${phaseName} 阶段失败` : `${phaseName} 阶段降级跳过`),
   });
-  if (fatal) {
-    ctx.degraded.push(`${phaseName} 失败`);
-    await failSession(deps, ctx.sessionId, ctx.taskId, `${phaseName}_failed`, `${phaseName} 阶段执行失败`);
-  } else {
-    ctx.degraded.push(`${phaseName} 降级`);
-  }
+  if (!fatal && !lastTimedOut) ctx.degraded.push(`${phaseName} 降级`);
+  return { status, fatal: fatal || lastTimedOut, taskId, errorCode: lastErrorCode };
 }
 
 async function createTask(
@@ -573,6 +644,59 @@ async function createTask(
 }
 
 
+async function updatePhaseProgress(
+  deps: OrchestrationDeps,
+  ctx: OrchestrationContext,
+  taskId: string,
+  progressValue: number,
+  summary: string,
+): Promise<void> {
+  const { error } = await deps.serviceClient.from('agent_tasks').update({
+    progress: progressValue,
+    user_summary: summary,
+  }).eq('id', taskId);
+  if (error) throw new OrchestrationError('task_progress_update_failed', error.message);
+  await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, 'task.progressed', {
+    role: 'map_explorer',
+    phase: 'map',
+    progress: progressValue,
+    summary,
+  });
+}
+
+async function finalizeTopLevelFailure(
+  deps: OrchestrationDeps,
+  sessionId: string,
+  commandId: string,
+  taskId: string,
+): Promise<void> {
+  const safeSummary = 'Agent 执行失败，请稍后重试。';
+  try {
+    await deps.serviceClient.from('agent_tasks').update({
+      status: 'failed',
+      error_code: 'orchestration_failed',
+      user_summary: safeSummary,
+      finished_at: new Date().toISOString(),
+    }).eq('id', taskId);
+  } catch (error) {
+    console.error('failed to finalize root task:', error instanceof Error ? error.message : String(error));
+  }
+  try {
+    await deps.serviceClient.from('squad_sessions').update({ status: 'failed' }).eq('id', sessionId);
+  } catch (error) {
+    console.error('failed to finalize session:', error instanceof Error ? error.message : String(error));
+  }
+  try {
+    await deps.serviceClient.from('captain_commands').update({ status: 'failed' }).eq('id', commandId);
+  } catch (error) {
+    console.error('failed to finalize command:', error instanceof Error ? error.message : String(error));
+  }
+  try {
+    await appendEvent(deps, sessionId, commandId, taskId, 'session.failed', { summary: safeSummary, code: 'orchestration_failed' });
+  } catch (error) {
+    console.error('failed to append orchestration failure event:', error instanceof Error ? error.message : String(error));
+  }
+}
 async function progress(
   deps: OrchestrationDeps,
   ctx: OrchestrationContext,
@@ -583,6 +707,7 @@ async function progress(
   await deps.serviceClient.from('agent_tasks').update({ user_summary: '已解析结构化条件' }).eq('id', taskId);
   await appendEvent(deps, ctx.sessionId, ctx.commandId, taskId, eventType, payload);
 }
+
 
 async function appendEvent(
   deps: OrchestrationDeps,
@@ -618,6 +743,7 @@ async function checkCancelled(deps: OrchestrationDeps, sessionId: string): Promi
 async function failSession(
   deps: OrchestrationDeps,
   sessionId: string,
+  commandId: string,
   taskId: string,
   code: string,
   message: string,
@@ -629,12 +755,14 @@ async function failSession(
     finished_at: new Date().toISOString(),
   }).eq('id', taskId);
   await deps.serviceClient.from('squad_sessions').update({ status: 'failed' }).eq('id', sessionId);
-  await appendEvent(deps, sessionId, null, taskId, 'session.failed', { summary: message, code });
+  await deps.serviceClient.from('captain_commands').update({ status: 'failed' }).eq('id', commandId);
+  await appendEvent(deps, sessionId, commandId, taskId, 'session.failed', { summary: message, code });
 }
 
 async function finishWithoutResults(deps: OrchestrationDeps, ctx: OrchestrationContext): Promise<void> {
   await deps.serviceClient.from('agent_tasks').update({
     status: 'succeeded',
+    progress: 100,
     user_summary: '未找到符合条件的地点，任务完成但无推荐结果',
     finished_at: new Date().toISOString(),
   }).eq('id', ctx.taskId);
