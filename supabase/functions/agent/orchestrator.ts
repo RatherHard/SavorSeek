@@ -541,9 +541,10 @@ async function runPhase(
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
+    let attemptActive = true;
     const workPromise = work(controller.signal, taskId);
     const attemptPromise = workPromise.then(async (result) => {
-      if (timedOut || controller.signal.aborted) throw new PhaseTimeoutError();
+      if (!attemptActive || timedOut || controller.signal.aborted) throw new PhaseTimeoutError();
       await persistPhaseResult(
         deps,
         ctx,
@@ -558,6 +559,7 @@ async function runPhase(
     const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         timedOut = true;
+        attemptActive = false;
         controller.abort();
         reject(new PhaseTimeoutError());
       }, timeoutMs);
@@ -575,6 +577,7 @@ async function runPhase(
         console.error(`[${phaseName}] late attempt failed:`, lateError instanceof Error ? lateError.message : String(lateError));
       });
     } finally {
+      attemptActive = false;
       if (timer !== undefined) clearTimeout(timer);
     }
 
@@ -591,7 +594,22 @@ async function runPhase(
       user_summary: lastTimedOut ? `${phaseName} 阶段超时` : `${phaseName} 阶段失败`,
       finished_at: new Date().toISOString(),
     }).eq('id', taskId);
-    await failSession(deps, ctx.sessionId, ctx.commandId, taskId, lastErrorCode, lastTimedOut ? `${phaseName} 阶段超时` : `${phaseName} 阶段执行失败`);
+    if (lastTimedOut) {
+      await deps.serviceClient.from('agent_tasks').update({
+        status: 'timed_out',
+        error_code: lastErrorCode,
+        user_summary: 'Agent 执行超时，请稍后重试。',
+        finished_at: new Date().toISOString(),
+      }).eq('id', ctx.taskId);
+      await deps.serviceClient.from('squad_sessions').update({ status: 'timed_out' }).eq('id', ctx.sessionId);
+      await deps.serviceClient.from('captain_commands').update({ status: 'failed' }).eq('id', ctx.commandId);
+      await appendEvent(deps, ctx.sessionId, ctx.commandId, ctx.taskId, 'session.failed', {
+        summary: 'Agent 执行超时，请稍后重试。',
+        code: lastErrorCode,
+      });
+    } else {
+      await failSession(deps, ctx.sessionId, ctx.commandId, ctx.taskId, lastErrorCode, `${phaseName} 阶段执行失败`);
+    }
     return { status, fatal: true, taskId, errorCode: lastErrorCode };
   }
   await deps.serviceClient.from('agent_tasks').update({
