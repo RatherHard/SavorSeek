@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import 'package:savorseek/app/theme/design_tokens.dart';
@@ -5,7 +7,9 @@ import 'package:savorseek/features/explore/place_card.dart';
 import 'package:savorseek/features/places/favorites_controller.dart';
 import 'package:savorseek/features/places/place_models.dart';
 
-/// A map-preserving results drawer for the current search batch.
+enum PlaceResultsLayout { auto, bottomSheet, floating }
+
+/// A map-preserving results panel for the current search batch.
 class PlaceResultsDrawer extends StatefulWidget {
   const PlaceResultsDrawer({
     super.key,
@@ -23,6 +27,9 @@ class PlaceResultsDrawer extends StatefulWidget {
     this.onRetryPagination,
     this.isPartial = false,
     this.onRetryPartial,
+    this.layout = PlaceResultsLayout.auto,
+    this.initiallyExpanded = true,
+    this.onExpandedChanged,
   });
 
   final List<Place> places;
@@ -39,13 +46,22 @@ class PlaceResultsDrawer extends StatefulWidget {
   final VoidCallback? onRetryPagination;
   final bool isPartial;
   final VoidCallback? onRetryPartial;
+  final PlaceResultsLayout layout;
+  final bool initiallyExpanded;
+  final ValueChanged<bool>? onExpandedChanged;
 
   @override
   State<PlaceResultsDrawer> createState() => _PlaceResultsDrawerState();
 }
 
 class _PlaceResultsDrawerState extends State<PlaceResultsDrawer> {
-  bool _isExpanded = true;
+  late bool _isExpanded;
+
+  @override
+  void initState() {
+    super.initState();
+    _isExpanded = widget.initiallyExpanded;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -53,16 +69,42 @@ class _PlaceResultsDrawerState extends State<PlaceResultsDrawer> {
       return const SizedBox.shrink();
     }
 
-    return AnimatedSwitcher(
-      duration: AppTokens.durationNormal,
-      switchInCurve: Curves.easeOut,
-      switchOutCurve: Curves.easeIn,
-      child: _isExpanded ? _buildExpanded(context) : _buildCollapsed(context),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final layout = _resolveLayout(constraints);
+        return switch (layout) {
+          PlaceResultsLayout.bottomSheet => AnimatedSwitcher(
+            duration: AppTokens.durationNormal,
+            switchInCurve: Curves.easeOut,
+            switchOutCurve: Curves.easeIn,
+            child: _isExpanded
+                ? _buildBottomSheet(context)
+                : _buildCollapsed(context),
+          ),
+          PlaceResultsLayout.floating => _buildFloatingPanel(
+            context,
+            constraints,
+          ),
+          PlaceResultsLayout.auto => const SizedBox.shrink(),
+        };
+      },
     );
   }
 
+  PlaceResultsLayout _resolveLayout(BoxConstraints constraints) {
+    if (widget.layout != PlaceResultsLayout.auto) return widget.layout;
+    return constraints.maxWidth >= 600 && constraints.maxHeight >= 400
+        ? PlaceResultsLayout.floating
+        : PlaceResultsLayout.bottomSheet;
+  }
+
+  void _setExpanded(bool value) {
+    if (_isExpanded == value) return;
+    setState(() => _isExpanded = value);
+    widget.onExpandedChanged?.call(value);
+  }
+
   Widget _buildCollapsed(BuildContext context) {
-    final countLabel = '${widget.places.length} 个地点';
     return Align(
       key: const ValueKey('collapsed-place-results'),
       alignment: Alignment.bottomCenter,
@@ -71,21 +113,26 @@ class _PlaceResultsDrawerState extends State<PlaceResultsDrawer> {
         child: Card(
           margin: EdgeInsets.zero,
           clipBehavior: Clip.antiAlias,
-          child: Semantics(
-            button: true,
-            label: '展开地点列表，共$countLabel',
-            child: IconButton(
-              onPressed: () => setState(() => _isExpanded = true),
-              icon: const Icon(Icons.list_alt_outlined),
-              tooltip: '展开地点列表',
-            ),
-          ),
+          child: _buildCollapsedContent(),
         ),
       ),
     );
   }
 
-  Widget _buildExpanded(BuildContext context) {
+  Widget _buildCollapsedContent() {
+    final countLabel = '${widget.places.length} 个地点';
+    return Semantics(
+      button: true,
+      label: '展开地点列表，共$countLabel',
+      child: IconButton(
+        onPressed: () => _setExpanded(true),
+        icon: const Icon(Icons.list_alt_outlined),
+        tooltip: '展开地点列表',
+      ),
+    );
+  }
+
+  Widget _buildBottomSheet(BuildContext context) {
     return DraggableScrollableSheet(
       key: const ValueKey('expanded-place-results'),
       initialChildSize: 0.12,
@@ -102,125 +149,225 @@ class _PlaceResultsDrawerState extends State<PlaceResultsDrawer> {
         clipBehavior: Clip.antiAlias,
         child: CustomScrollView(
           controller: scrollController,
-          slivers: [
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  AppTokens.spaceMd,
-                  AppTokens.spaceSm,
-                  AppTokens.spaceMd,
-                  AppTokens.spaceXs,
-                ),
-                child: Column(
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        borderRadius: BorderRadius.circular(
-                          AppTokens.radiusFull,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: AppTokens.spaceSm),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            widget.hasMore
-                                ? '已加载 ${widget.places.length} 个地点'
-                                : '查看 ${widget.places.length} 个地点',
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                        ),
-                        IconButton(
-                          onPressed: () => setState(() => _isExpanded = false),
-                          icon: const Icon(Icons.expand_more),
-                          tooltip: '收起地点列表',
-                        ),
-                      ],
-                    ),
-                    if (widget.isPartial)
-                      _DrawerNotice(
-                        message: '部分地点已加载，部分区域暂不可用。',
-                        actionLabel: widget.onRetryPartial == null
-                            ? null
-                            : '重试',
-                        onAction: widget.onRetryPartial,
-                      ),
-                  ],
-                ),
-              ),
-            ),
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(
-                AppTokens.spaceSm,
-                AppTokens.spaceXs,
-                AppTokens.spaceSm,
-                AppTokens.spaceLg,
-              ),
-              sliver: SliverList.builder(
-                itemCount: widget.places.length,
-                itemBuilder: (context, index) {
-                  final place = widget.places[index];
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: AppTokens.spaceSm),
-                    child: PlaceCard(
-                      place: place,
-                      isFavorite: widget.favorites.isFavorite(place.id),
-                      isFavoritePending: _isPending(place.id),
-                      selected: place.id == widget.selectedPlaceId,
-                      favoriteError: widget.favorites.errorFor(place.id),
-                      onRetryFavorite: widget.onRetryFavorite == null
-                          ? null
-                          : () => widget.onRetryFavorite!(place.id),
-                      onUnauthenticatedFavorite:
-                          widget.onUnauthenticatedFavorite == null
-                          ? null
-                          : () => widget.onUnauthenticatedFavorite!(place.id),
-                      onSelected: () => widget.onSelect(place),
-                      onToggleFavorite: widget.onToggleFavorite == null
-                          ? null
-                          : () => widget.onToggleFavorite!(place.id),
-                    ),
-                  );
-                },
-              ),
-            ),
-            if (widget.paginationError != null || widget.hasMore)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: AppTokens.spaceLg),
-                  child: Column(
-                    children: [
-                      if (widget.paginationError != null)
-                        _DrawerNotice(
-                          message: widget.paginationError!,
-                          actionLabel: widget.onRetryPagination == null
-                              ? null
-                              : '重试',
-                          onAction: widget.onRetryPagination,
-                        ),
-                      if (widget.hasMore)
-                        widget.isLoadingMore
-                            ? const Padding(
-                                padding: EdgeInsets.all(AppTokens.spaceMd),
-                                child: CircularProgressIndicator(),
-                              )
-                            : OutlinedButton.icon(
-                                onPressed: widget.onLoadMore,
-                                icon: const Icon(Icons.expand_more),
-                                label: const Text('加载更多'),
-                              ),
-                    ],
-                  ),
-                ),
-              ),
-          ],
+          slivers: _buildSlivers(context, includeHandle: true),
         ),
       ),
     );
+  }
+
+  Widget _buildFloatingPanel(BuildContext context, BoxConstraints constraints) {
+    final availableWidth = math.max(48.0, constraints.maxWidth - 24);
+    final availableHeight = math.max(48.0, constraints.maxHeight - 24);
+    final expandedWidth = math.min(420.0, availableWidth);
+    final expandedHeight = math.min(560.0, availableHeight);
+    final panelWidth = _isExpanded ? expandedWidth : 52.0;
+    final panelHeight = _isExpanded ? expandedHeight : 52.0;
+
+    return Align(
+      alignment: Alignment.bottomLeft,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: AnimatedContainer(
+          duration: AppTokens.durationNormal,
+          curve: Curves.easeOut,
+          width: panelWidth,
+          height: panelHeight,
+          child: ClipRect(
+            child: _isExpanded
+                ? OverflowBox(
+                    alignment: Alignment.bottomLeft,
+                    minWidth: expandedWidth,
+                    maxWidth: expandedWidth,
+                    minHeight: expandedHeight,
+                    maxHeight: expandedHeight,
+                    child: Card(
+                      margin: EdgeInsets.zero,
+                      clipBehavior: Clip.antiAlias,
+                      child: _buildFloatingExpanded(context),
+                    ),
+                  )
+                : Card(
+                    margin: EdgeInsets.zero,
+                    clipBehavior: Clip.antiAlias,
+                    child: Center(child: _buildCollapsedContent()),
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFloatingExpanded(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(AppTokens.spaceMd),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(child: _buildFloatingHeader(context)),
+                const SliverToBoxAdapter(
+                  child: SizedBox(height: AppTokens.spaceSm),
+                ),
+                ..._buildSlivers(context),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFloatingHeader(BuildContext context) {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                widget.hasMore
+                    ? '已加载 ${widget.places.length} 个地点'
+                    : '查看 ${widget.places.length} 个地点',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            IconButton(
+              onPressed: () => _setExpanded(false),
+              icon: const Icon(Icons.chevron_left),
+              tooltip: '收起地点列表',
+            ),
+          ],
+        ),
+        if (widget.isPartial)
+          _DrawerNotice(
+            message: '部分地点已加载，部分区域暂不可用。',
+            actionLabel: widget.onRetryPartial == null ? null : '重试',
+            onAction: widget.onRetryPartial,
+          ),
+      ],
+    );
+  }
+
+  List<Widget> _buildSlivers(
+    BuildContext context, {
+    bool includeHandle = false,
+  }) {
+    return [
+      SliverToBoxAdapter(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            AppTokens.spaceMd,
+            includeHandle ? AppTokens.spaceSm : 0,
+            AppTokens.spaceMd,
+            AppTokens.spaceXs,
+          ),
+          child: Column(
+            children: [
+              if (includeHandle) ...[
+                Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    borderRadius: BorderRadius.circular(AppTokens.radiusFull),
+                  ),
+                ),
+                const SizedBox(height: AppTokens.spaceSm),
+              ],
+              if (includeHandle)
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        widget.hasMore
+                            ? '已加载 ${widget.places.length} 个地点'
+                            : '查看 ${widget.places.length} 个地点',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => _setExpanded(false),
+                      icon: const Icon(Icons.expand_more),
+                      tooltip: '收起地点列表',
+                    ),
+                  ],
+                ),
+              if (includeHandle && widget.isPartial)
+                _DrawerNotice(
+                  message: '部分地点已加载，部分区域暂不可用。',
+                  actionLabel: widget.onRetryPartial == null ? null : '重试',
+                  onAction: widget.onRetryPartial,
+                ),
+            ],
+          ),
+        ),
+      ),
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(
+          AppTokens.spaceSm,
+          AppTokens.spaceXs,
+          AppTokens.spaceSm,
+          AppTokens.spaceLg,
+        ),
+        sliver: SliverList.builder(
+          itemCount: widget.places.length,
+          itemBuilder: (context, index) {
+            final place = widget.places[index];
+            return Padding(
+              key: ValueKey(place.id),
+              padding: const EdgeInsets.only(bottom: AppTokens.spaceSm),
+              child: PlaceCard(
+                key: ValueKey('place-card-${place.id}'),
+                place: place,
+                isFavorite: widget.favorites.isFavorite(place.id),
+                isFavoritePending: _isPending(place.id),
+                selected: place.id == widget.selectedPlaceId,
+                favoriteError: widget.favorites.errorFor(place.id),
+                onRetryFavorite: widget.onRetryFavorite == null
+                    ? null
+                    : () => widget.onRetryFavorite!(place.id),
+                onUnauthenticatedFavorite:
+                    widget.onUnauthenticatedFavorite == null
+                    ? null
+                    : () => widget.onUnauthenticatedFavorite!(place.id),
+                onSelected: () => widget.onSelect(place),
+                onToggleFavorite: widget.onToggleFavorite == null
+                    ? null
+                    : () => widget.onToggleFavorite!(place.id),
+              ),
+            );
+          },
+        ),
+      ),
+      if (widget.paginationError != null || widget.hasMore)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: AppTokens.spaceLg),
+            child: Column(
+              children: [
+                if (widget.paginationError != null)
+                  _DrawerNotice(
+                    message: widget.paginationError!,
+                    actionLabel: widget.onRetryPagination == null ? null : '重试',
+                    onAction: widget.onRetryPagination,
+                  ),
+                if (widget.hasMore)
+                  widget.isLoadingMore
+                      ? const Padding(
+                          padding: EdgeInsets.all(AppTokens.spaceMd),
+                          child: CircularProgressIndicator(),
+                        )
+                      : OutlinedButton.icon(
+                          onPressed: widget.onLoadMore,
+                          icon: const Icon(Icons.expand_more),
+                          label: const Text('加载更多'),
+                        ),
+              ],
+            ),
+          ),
+        ),
+    ];
   }
 
   bool _isPending(String placeId) {
