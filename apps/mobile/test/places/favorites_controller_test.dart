@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 import 'package:savorseek/features/places/favorite_repository.dart';
 import 'package:savorseek/features/places/favorites_controller.dart';
+import 'package:savorseek/features/places/place_models.dart';
 
 class _FakeAuth implements AuthService {
   String? userId;
@@ -41,6 +42,7 @@ class _FakeAuth implements AuthService {
 
 class _FakeRepository implements FavoriteRepository {
   Set<String> ids = {};
+  List<FavoritePlace> favorites = const [];
   Object? error;
   final addCalls = <({String placeId, String key})>[];
   final removeCalls = <({String placeId, String key})>[];
@@ -81,8 +83,25 @@ class _FakeRepository implements FavoriteRepository {
   Future<List<FavoritePlace>> listFavorites({
     int limit = 20,
     int offset = 0,
-  }) async => const [];
+  }) async {
+    if (error case final Object failure) throw failure;
+    return favorites.skip(offset).take(limit).toList(growable: false);
+  }
 }
+
+Place _place(String id, String name) => Place(
+  id: id,
+  name: name,
+  fetchedAt: DateTime(2026, 8, 31),
+  category: '餐饮服务;中餐厅',
+  address: '海边路 1 号',
+);
+
+FavoritePlace _favorite(String id, String name) => FavoritePlace(
+  favoriteId: 'favorite-$id',
+  place: _place(id, name),
+  createdAt: DateTime(2026, 8, 31),
+);
 
 void main() {
   late _FakeAuth auth;
@@ -100,6 +119,35 @@ void main() {
     auth.changes.close();
   });
 
+  test(
+    'loads complete favorite rows without ID projection changing list state',
+    () async {
+      final favorite = _favorite('place-1', '海边小馆');
+      repository.favorites = [favorite];
+      repository.ids = {'place-1'};
+
+      await Future.wait([
+        controller.loadFavoritePlaceIds(),
+        controller.loadFavorites(),
+      ]);
+
+      expect(controller.favoritePlaces, [favorite]);
+      expect(controller.listStatus, FavoriteListStatus.loaded);
+      expect(controller.favoriteIds, {'place-1'});
+    },
+  );
+  test('removal wins over a stale list refresh', () async {
+    final favorite = _favorite('place-1', '海边小馆');
+    repository.favorites = [favorite];
+    await controller.loadFavorites();
+
+    final refresh = controller.loadFavorites();
+    await controller.toggle('place-1');
+    await refresh;
+
+    expect(controller.favoritePlaces, isEmpty);
+    expect(controller.favoriteIds, isEmpty);
+  });
   test('optimistically adds and settles a favorite', () async {
     final future = controller.toggle('place-1');
     expect(controller.isFavorite('place-1'), isTrue);

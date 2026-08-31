@@ -11,16 +11,21 @@ import 'package:savorseek/features/places/place_models.dart';
 
 /// 我的页（P-MINE）。
 class MinePage extends StatefulWidget {
-  const MinePage({super.key, this.auth, this.favoriteController});
+  const MinePage({
+    super.key,
+    this.auth,
+    this.favoriteController,
+    this.isActive = true,
+  });
 
   final AuthService? auth;
   final FavoritesController? favoriteController;
+  final bool isActive;
 
   static const List<({IconData icon, String label})> sections = [
     (icon: Icons.insights_outlined, label: '偏好分析'),
     (icon: Icons.bookmark_outline, label: '收藏的地点'),
     (icon: Icons.account_circle_outlined, label: '账号管理'),
-    (icon: Icons.settings_outlined, label: '设置'),
   ];
 
   static const String accountLabel = '账号管理';
@@ -44,6 +49,16 @@ class _MinePageState extends State<MinePage> {
       }
     });
     if (widget.auth?.isSignedIn == true) {
+      unawaited(widget.favoriteController?.loadFavorites());
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant MinePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.isActive &&
+        widget.isActive &&
+        widget.auth?.isSignedIn == true) {
       unawaited(widget.favoriteController?.loadFavorites());
     }
   }
@@ -135,12 +150,6 @@ class _MinePageState extends State<MinePage> {
           onTap: _handleAccountTap,
         ),
         const SizedBox(height: AppTokens.spaceSm),
-        _SectionCard(
-          icon: Icons.settings_outlined,
-          title: '设置',
-          subtitle: '待实现',
-          enabled: false,
-        ),
       ],
     );
   }

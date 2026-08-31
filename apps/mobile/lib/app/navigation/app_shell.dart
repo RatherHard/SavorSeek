@@ -89,6 +89,7 @@ class _AppShellState extends State<AppShell> {
             MinePage(
               auth: widget.dependencies.auth,
               favoriteController: _favorites,
+              isActive: _current == AppDestination.mine,
             ),
           ],
         ),

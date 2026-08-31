@@ -58,15 +58,21 @@ void main() {
       expect(find.text('重新加载'), findsOneWidget);
     });
 
-    testWidgets('点击我的展示四个职责分区', (tester) async {
+    testWidgets('点击我的展示三个可见职责分区并隐藏设置', (tester) async {
       await tester.pumpWidget(const SavorSeekApp());
 
       await tester.tap(find.text('我的'));
       await tester.pumpAndSettle();
 
-      for (final section in MinePage.sections) {
-        expect(find.text(section.label), findsOneWidget);
+      expect(MinePage.sections.map((section) => section.label).toList(), [
+        '偏好分析',
+        '收藏的地点',
+        '账号管理',
+      ]);
+      for (final label in ['偏好分析', '收藏的地点', '账号管理']) {
+        expect(find.text(label), findsOneWidget);
       }
+      expect(find.text('设置'), findsNothing);
     });
 
     testWidgets('三个页面始终在树上，切页不丢状态', (tester) async {

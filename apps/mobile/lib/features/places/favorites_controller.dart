@@ -35,7 +35,8 @@ class FavoritesController extends ChangeNotifier {
   FavoriteListStatus _listStatus = FavoriteListStatus.idle;
   FavoriteRepositoryException? _listError;
   int _sessionGeneration = 0;
-  int _readGeneration = 0;
+  int _idReadGeneration = 0;
+  int _listReadGeneration = 0;
   bool _disposed = false;
 
   Set<String> get favoriteIds => Set.unmodifiable(_favoriteIds);
@@ -63,12 +64,11 @@ class FavoritesController extends ChangeNotifier {
       return;
     }
     final generation = _sessionGeneration;
-    final readGeneration = ++_readGeneration;
-    _setListState(FavoriteListStatus.loading);
+    final readGeneration = ++_idReadGeneration;
     try {
       final ids = await _repository.loadFavoritePlaceIds(placeIds: placeIds);
       if (!_isCurrent(generation)) return;
-      if (readGeneration != _readGeneration) return;
+      if (readGeneration != _idReadGeneration) return;
       final requestedIds = placeIds.toSet();
       if (requestedIds.isEmpty) {
         _favoriteIds
@@ -85,20 +85,14 @@ class FavoritesController extends ChangeNotifier {
           _errors.remove(placeId);
         }
       }
-      _setListState(
-        ids.isEmpty ? FavoriteListStatus.empty : FavoriteListStatus.loaded,
-      );
     } on FavoriteRepositoryException catch (error) {
       if (!_isCurrent(generation)) return;
-      _setListState(FavoriteListStatus.failed, error: error);
+      _listError = error;
     } on Exception {
       if (!_isCurrent(generation)) return;
-      _setListState(
-        FavoriteListStatus.failed,
-        error: const FavoriteRepositoryException(
-          '收藏服务暂时不可用，请稍后重试。',
-          kind: FavoriteErrorKind.unavailable,
-        ),
+      _listError = const FavoriteRepositoryException(
+        '收藏服务暂时不可用，请稍后重试。',
+        kind: FavoriteErrorKind.unavailable,
       );
     }
   }
@@ -110,19 +104,30 @@ class FavoritesController extends ChangeNotifier {
       return;
     }
     final generation = _sessionGeneration;
-    final readGeneration = ++_readGeneration;
+    final readGeneration = ++_listReadGeneration;
     _setListState(FavoriteListStatus.loading);
     try {
       final places = await _repository.listFavorites();
       if (!_isCurrent(generation)) return;
-      if (readGeneration != _readGeneration) return;
-      _favoritePlaces = List.unmodifiable(places);
+      if (readGeneration != _listReadGeneration) return;
+      final pendingRemovals = _operations.entries
+          .where(
+            (entry) => entry.value.desired == false && _isPending(entry.key),
+          )
+          .map((entry) => entry.key)
+          .toSet();
+      final visiblePlaces = places
+          .where((favorite) => !pendingRemovals.contains(favorite.place.id))
+          .toList(growable: false);
+      _favoritePlaces = List.unmodifiable(visiblePlaces);
       final pendingIds = _operations.keys.where(_isPending).toSet();
       _favoriteIds
         ..removeWhere((id) => !pendingIds.contains(id))
-        ..addAll(places.map((favorite) => favorite.place.id));
+        ..addAll(visiblePlaces.map((favorite) => favorite.place.id));
       _setListState(
-        places.isEmpty ? FavoriteListStatus.empty : FavoriteListStatus.loaded,
+        visiblePlaces.isEmpty
+            ? FavoriteListStatus.empty
+            : FavoriteListStatus.loaded,
       );
     } on FavoriteRepositoryException catch (error) {
       if (!_isCurrent(generation)) return;
@@ -202,6 +207,9 @@ class FavoritesController extends ChangeNotifier {
       }
       if (!operation.desired) {
         _removedFavorites.remove(placeId);
+        _favoritePlaces = List.unmodifiable(
+          _favoritePlaces.where((item) => item.place.id != placeId),
+        );
       }
       _mutationStates.remove(placeId);
       _errors.remove(placeId);
