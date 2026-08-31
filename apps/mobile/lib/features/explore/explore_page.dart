@@ -345,7 +345,8 @@ class _ExplorePageState extends State<ExplorePage> {
           onSubmit:
               search == null ||
                   search.isLoading ||
-                  widget.agentController?.isSubmitting == true
+                  widget.agentController?.isSubmitting == true ||
+                  widget.agentController?.isCreatingRouteTrip == true
               ? null
               : _submitCommand,
         ),

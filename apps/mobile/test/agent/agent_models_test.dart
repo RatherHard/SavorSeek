@@ -141,6 +141,29 @@ void main() {
     },
   );
 
+  test('decodes route draft title, place names, and revision', () {
+    final draft = AgentTripDraft.fromJson({
+      'id': 'draft-1',
+      'trip_id': 'trip-1',
+      'base_revision': 2,
+      'proposed_title': '大连 · 晚餐',
+      'status': 'proposed',
+      'items': [
+        {'itemType': 'place_visit', 'title': '海鲜面馆'},
+        {'itemType': 'place_visit', 'title': '烧烤店'},
+      ],
+      'warnings': ['请确认营业时间'],
+    });
+
+    expect(draft.id, 'draft-1');
+    expect(draft.tripId, 'trip-1');
+    expect(draft.baseRevision, 2);
+    expect(draft.title, '大连 · 晚餐');
+    expect(draft.placeNames, ['海鲜面馆', '烧烤店']);
+    expect(draft.warnings, ['请确认营业时间']);
+    expect(draft.canApply, isTrue);
+  });
+
   test('Given no projection arrays, When it is decoded, Then empty collections are returned', () {
     final snapshot = AgentWorkspaceSnapshot.fromJson(const {});
 
