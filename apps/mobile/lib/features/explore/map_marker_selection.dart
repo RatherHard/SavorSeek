@@ -6,25 +6,6 @@ const _selectionVersion = 'marker-selection-v3';
 const _earthMetersPerDegreeLatitude = 110540.0;
 const _earthMetersPerDegreeLongitude = 111320.0;
 
-const _foodCategories = <String>{
-  '餐饮服务',
-  '餐饮',
-  '中餐厅',
-  '西餐厅',
-  '外国餐厅',
-  '快餐厅',
-  '特色餐饮',
-  '火锅',
-  '烧烤',
-  '小吃',
-  '咖啡厅',
-  '茶饮',
-  '甜品',
-  '糕点',
-  '面包',
-  '料理',
-};
-
 class MapMarkerSelectionContext {
   const MapMarkerSelectionContext({
     required this.centerLatitude,
@@ -79,28 +60,6 @@ class MapMarkerSelectionResult {
   final int eligibleCount;
   final String selectionKey;
   final bool isValid;
-}
-
-bool isFoodCategory(String? category) {
-  final value = category;
-  if (value == null) return false;
-  final levels = value
-      .replaceAll('；', ';')
-      .split(';')
-      .map((part) => part.trim().toLowerCase())
-      .where((part) => part.isNotEmpty);
-  return levels.any(_foodCategories.contains);
-}
-
-/// Returns the food-only projection used by the Explore results drawer.
-///
-/// This intentionally checks only the category. Coordinates and ratings are
-/// marker-specific requirements; a food place without either is still useful
-/// in the results list and can be opened for details.
-List<Place> filterFoodPlaces(Iterable<Place> places) {
-  return List.unmodifiable(
-    places.where((place) => isFoodCategory(place.category)),
-  );
 }
 
 bool isValidAmapRating(double? rating) =>
@@ -274,7 +233,6 @@ int _compareCellKeys(String a, String b) {
 
 bool _isEligible(Place place) =>
     place.id.trim().isNotEmpty &&
-    isFoodCategory(place.category) &&
     isValidAmapRating(place.rating) &&
     place.latitude != null &&
     place.longitude != null &&

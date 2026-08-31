@@ -37,44 +37,13 @@ MapMarkerSelectionContext context({
 }
 
 void main() {
-  test('filters drawer places by food category while preserving order', () {
-    final unratedFood = buildPlace(
-      id: 'unrated-food',
-      latitude: 38.914,
-      longitude: 121.615,
-      rating: null,
-    );
-    final result = filterFoodPlaces([
-      buildPlace(id: 'food-a', category: '餐饮服务；中餐厅'),
-      buildPlace(id: 'sight', category: '风景名胜;公园'),
-      unratedFood,
-      buildPlace(id: 'unknown', category: null),
-    ]);
-
-    expect(result.map((place) => place.id), ['food-a', 'unrated-food']);
-    expect(() => result.add(buildPlace(id: 'later')), throwsUnsupportedError);
-  });
-
-  test('keeps food places without coordinates in drawer projection', () {
-    final place = Place(
-      id: 'food-without-coordinate',
-      name: '待补坐标的小店',
-      category: '餐饮服务;小吃',
-      rating: 4,
-      fetchedAt: DateTime(2026, 8, 28),
+  test('accepts Agent places without client food classification', () {
+    final result = selectMapMarkers(
+      places: [buildPlace(id: 'agent-place', category: '风景名胜;公园', rating: 4.5)],
+      context: context(),
     );
 
-    expect(filterFoodPlaces([place]), [place]);
-  });
-
-  test('rejects unknown and empty categories in drawer projection', () {
-    final result = filterFoodPlaces([
-      buildPlace(id: 'empty', category: ''),
-      buildPlace(id: 'unknown', category: '购物服务;商场'),
-      buildPlace(id: 'food', category: ' 餐饮服务 ; 咖啡厅 '),
-    ]);
-
-    expect(result.map((place) => place.id), ['food']);
+    expect(result.places.single.id, 'agent-place');
   });
 
   test('keeps food places without a rating when coordinates are valid', () {
