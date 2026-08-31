@@ -5,8 +5,45 @@ import 'package:savorseek/app/config/amap_config.dart';
 import 'package:savorseek/features/explore/agent_command_bar.dart';
 import 'package:savorseek/features/explore/amap_consent.dart';
 import 'package:savorseek/features/explore/explore_page.dart';
+import 'package:savorseek/features/location/location_service.dart';
 
 void main() {
+  group('ExplorePage 行为', () {
+    test('首次定位相机以设备位置为中心', () {
+      const location = DeviceLocation(latitude: 31.2304, longitude: 121.4737);
+
+      final camera = cameraForDeviceLocation(location);
+
+      expect(camera.target.latitude, closeTo(location.latitude, 0.000001));
+      expect(camera.target.longitude, closeTo(location.longitude, 0.000001));
+      expect(camera.zoom, 15);
+    });
+
+    test('地点详情打开时隐藏 Agent 工作区，关闭后恢复', () {
+      expect(
+        shouldShowExploreAgentPanel(
+          hasAgentController: true,
+          hasSelectedPlace: true,
+        ),
+        isFalse,
+      );
+      expect(
+        shouldShowExploreAgentPanel(
+          hasAgentController: true,
+          hasSelectedPlace: false,
+        ),
+        isTrue,
+      );
+      expect(
+        shouldShowExploreAgentPanel(
+          hasAgentController: false,
+          hasSelectedPlace: false,
+        ),
+        isFalse,
+      );
+    });
+  });
+
   group('ExplorePage 布局', () {
     testWidgets('指令栏固定在底部，地图区域占据其余空间', (tester) async {
       await tester.pumpWidget(
