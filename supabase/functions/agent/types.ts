@@ -88,6 +88,7 @@ export interface VerifiedPlace extends PlaceCandidate {
 /** 推荐项。分数只来自规则与数据字段，LLM 不凭空生成事实。 */
 export interface RecommendationItem {
   placeId: string | null;
+  providerPlaceId: string;
   name: string;
   rank: number;
   score: number;
@@ -95,6 +96,25 @@ export interface RecommendationItem {
   reasonCodes: string[];
   confidence: number;
   riskFlags: string[];
+  placeSnapshot?: PlaceSnapshot;
+}
+
+/** Canonical public.places fields safe for client map/detail rendering. */
+export interface PlaceSnapshot {
+  id: string;
+  provider_place_id: string;
+  name: string;
+  category: string | null;
+  address: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  rating: number | null;
+  cuisine_tags: string[] | null;
+  price_level: number | null;
+  business_status: 'open' | 'closed' | 'unknown' | null;
+  provenance: string;
+  coordinate_system: 'gcj02' | 'wgs84';
+  fetched_at: string;
 }
 
 /** 编排阶段上下文，阶段函数之间只通过它传递结构化产物。 */

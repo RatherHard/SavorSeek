@@ -9,10 +9,16 @@ import 'package:savorseek/features/agent/agent_context.dart';
 import 'package:savorseek/features/agent/agent_models.dart';
 import 'package:savorseek/features/agent/agent_event_reducer.dart';
 import 'package:savorseek/features/agent/agent_repository.dart';
+import 'package:savorseek/features/agent/route_trip_factory.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 
 class AgentController extends ChangeNotifier {
-  AgentController({required this.repository, required this.auth, this.client}) {
+  AgentController({
+    required this.repository,
+    required this.auth,
+    this.client,
+    this.routeTripFactory,
+  }) {
     _currentUserId = auth.currentUserId;
     _authSubscription = auth.userIdChanges.listen(_onUserChanged);
   }
@@ -20,6 +26,7 @@ class AgentController extends ChangeNotifier {
   final AgentRepository repository;
   final AuthService auth;
   final SupabaseClient? client;
+  final RouteTripFactory? routeTripFactory;
   AgentWorkspaceSnapshot _snapshot = const AgentWorkspaceSnapshot();
   RealtimeChannel? _channel;
   StreamSubscription<String?>? _authSubscription;
@@ -33,6 +40,7 @@ class AgentController extends ChangeNotifier {
   String? _currentUserId;
   String? _sessionId;
   bool _isSubmitting = false;
+  bool _isCreatingRouteTrip = false;
   String? _error;
   String? _lastFailedSubmission;
   int _lifecycleGeneration = 0;
@@ -42,6 +50,7 @@ class AgentController extends ChangeNotifier {
 
   AgentWorkspaceSnapshot get snapshot => _snapshot;
   bool get isSubmitting => _isSubmitting;
+  bool get isCreatingRouteTrip => _isCreatingRouteTrip;
   String? get error => _error;
   bool get hasSession => _sessionId != null;
   bool get canRetrySubmit => _lastFailedSubmission != null && !_isSubmitting;
@@ -87,6 +96,78 @@ class AgentController extends ChangeNotifier {
       taskType: taskType,
       signature: signature,
     );
+  }
+
+  Future<void> submitRoute(
+    String text, {
+    AgentSubmitContext context = const AgentSubmitContext(),
+    Map<String, dynamic> constraints = const {},
+  }) async {
+    final factory = routeTripFactory;
+    if (factory == null) {
+      _error = '路线规划服务尚未配置。';
+      notifyListeners();
+      return;
+    }
+    if (_isSubmitting ||
+        _isCreatingRouteTrip ||
+        text.trim().isEmpty ||
+        !auth.isSignedIn) {
+      return;
+    }
+    final generation = _lifecycleGeneration;
+    final userId = _currentUserId;
+    final requestId = _newRequestId();
+    _isCreatingRouteTrip = true;
+    _error = null;
+    notifyListeners();
+    try {
+      final trip = await factory.createRouteTrip(idempotencyKey: requestId);
+      if (_isDisposed ||
+          generation != _lifecycleGeneration ||
+          userId != _currentUserId ||
+          !auth.isSignedIn) {
+        return;
+      }
+      final stableContext = AgentSubmitContext(
+        mapViewport: context.mapViewport,
+        selectedPlaceIds: List.unmodifiable(context.selectedPlaceIds),
+        tripId: trip.id,
+        tripRevision: trip.revision,
+      );
+      final stableConstraints = _copyMap(constraints);
+      final submitSignature = jsonEncode([
+        text.trim(),
+        'plan_route',
+        stableContext.toJson(),
+        stableConstraints,
+      ]);
+      _pendingSubmissions[submitSignature] = _PendingSubmission(
+        text: text.trim(),
+        requestId: requestId,
+        context: stableContext,
+        constraints: stableConstraints,
+        taskType: 'plan_route',
+      );
+      _lastFailedSubmission = null;
+      await _submitWithRequest(
+        text.trim(),
+        requestId: requestId,
+        context: stableContext,
+        constraints: stableConstraints,
+        taskType: 'plan_route',
+        signature: submitSignature,
+      );
+    } on AgentRepositoryException catch (error) {
+      _error = error.message;
+      notifyListeners();
+    } on Exception catch (error) {
+      _error = error.toString();
+      notifyListeners();
+    } finally {
+      _isCreatingRouteTrip = false;
+      notifyListeners();
+    }
   }
 
   Future<void> retrySubmit() async {

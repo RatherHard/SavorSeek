@@ -41,6 +41,7 @@ class _AppShellState extends State<AppShell> {
     repository: widget.dependencies.agentRepository,
     auth: widget.dependencies.auth,
     client: widget.dependencies.supabaseClient,
+    routeTripFactory: widget.dependencies.routeTripFactory,
   );
 
   @override
