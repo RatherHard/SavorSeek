@@ -143,6 +143,8 @@ async function runOrchestrationInternal(
   };
 
   const viewport = extractViewport(commandRow['context']);
+  const currentLocation = extractCurrentLocation(commandRow['context']);
+  const searchOrigin = currentLocation ?? viewport;
   const sessionClosed = await checkCancelled(deps, sessionId);
   if (sessionClosed) return;
 
@@ -186,7 +188,7 @@ async function runOrchestrationInternal(
 
   // ── Phase B：Map 召回候选 ────────────────────────────────────────
   const mapOutcome = await runPhase(deps, ctx, 'map_explorer', 'map', async (signal, phaseTaskId) => {
-    const query = buildSearchQuery(ctx, viewport);
+    const query = buildSearchQuery(ctx, searchOrigin);
     await updatePhaseProgress(deps, ctx, phaseTaskId, 25, '正在检索地图地点');
     const places = await searchAmapPlaces(query, requireAmapKey(), signal);
     if (signal.aborted) throw new PhaseTimeoutError();
@@ -238,8 +240,8 @@ async function runOrchestrationInternal(
       ? Math.trunc(ctx.constraints['resultLimit'] as number)
       : 5;
     ctx.recommendations = rankPlaces(usable, ctx.intent!, signals, {
-      centerLatitude: viewport?.latitude ?? null,
-      centerLongitude: viewport?.longitude ?? null,
+      centerLatitude: searchOrigin?.latitude ?? null,
+      centerLongitude: searchOrigin?.longitude ?? null,
       resultLimit,
     });
     return { summary: `已生成 ${ctx.recommendations.length} 条推荐`, complete: true, artifact: { type: 'recommendation_set', payload: { items: ctx.recommendations } } };
@@ -868,14 +870,14 @@ async function finishWithoutResults(deps: OrchestrationDeps, ctx: OrchestrationC
 
 function buildSearchQuery(
   ctx: OrchestrationContext,
-  viewport: { latitude: number; longitude: number } | null,
+  origin: { latitude: number; longitude: number } | null,
 ): AmapQuery {
   const keywords = ctx.intent?.keywords ?? '美食';
-  if (viewport) {
+  if (origin) {
     return {
       kind: 'around',
-      longitude: viewport.longitude,
-      latitude: viewport.latitude,
+      longitude: origin.longitude,
+      latitude: origin.latitude,
       radius: 5000,
       keywords,
       page: 1,
@@ -903,7 +905,23 @@ function extractViewport(context: unknown): { latitude: number; longitude: numbe
   return null;
 }
 
-function intentSummary(intent: NonNullable<OrchestrationContext['intent']>): string {
+function extractCurrentLocation(context: unknown): { latitude: number; longitude: number } | null {
+  if (typeof context !== 'object' || context === null) return null;
+  const location = (context as Record<string, unknown>)['currentLocation'];
+  if (typeof location !== 'object' || location === null) return null;
+  const latitude = (location as Record<string, unknown>)['latitude'];
+  const longitude = (location as Record<string, unknown>)['longitude'];
+  if (
+    typeof latitude === 'number' && Number.isFinite(latitude) &&
+    latitude >= -90 && latitude <= 90 &&
+    typeof longitude === 'number' && Number.isFinite(longitude) &&
+    longitude >= -180 && longitude <= 180
+  ) {
+    return { latitude, longitude };
+  }
+  return null;
+}
+
   const parts: string[] = [];
   if (intent.city) parts.push(`城市 ${intent.city}`);
   if (intent.area) parts.push(`区域 ${intent.area}`);
