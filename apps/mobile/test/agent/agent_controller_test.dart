@@ -213,6 +213,21 @@ void main() {
     },
   );
 
+  test('does not operate on a finalized recommendation set', () async {
+    final set = const AgentRecommendationSet(
+      id: 'set-finalized',
+      items: [
+        {'name': '甲店'},
+      ],
+      status: 'captain_selected',
+    );
+
+    await controller.selectRecommendation(set);
+    await controller.rejectRecommendation(set);
+
+    expect(repository.calls, isEmpty);
+  });
+
   test('logout clears private state and ignores the old session', () async {
     repository.snapshots.add(snapshot('session-1', 1));
     await controller.submit('找晚餐');

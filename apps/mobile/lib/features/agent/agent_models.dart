@@ -49,15 +49,23 @@ class AgentTask {
 
 @immutable
 class AgentRecommendationSet {
-  const AgentRecommendationSet({required this.id, required this.items});
+  const AgentRecommendationSet({
+    required this.id,
+    required this.items,
+    this.status = 'generated',
+  });
 
   final String id;
   final List<Map<String, dynamic>> items;
+  final String status;
+
+  bool get canCaptainDecide => status == 'generated' || status == 'displayed';
 
   factory AgentRecommendationSet.fromJson(Map<String, dynamic> json) {
     final rawItems = json['items'];
     return AgentRecommendationSet(
       id: '${json['id']}',
+      status: '${json['status'] ?? 'generated'}',
       items: rawItems is List
           ? List.unmodifiable(
               rawItems.whereType<Map>().map(Map<String, dynamic>.from),

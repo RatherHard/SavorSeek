@@ -69,12 +69,12 @@ class _Repository implements AgentRepository {
     required String sessionId,
     required String recommendationSetId,
     required List<String> placeNames,
-  }) async {}
+  }) async => calls.add('select');
   @override
   Future<void> rejectRecommendation({
     required String sessionId,
     required String recommendationSetId,
-  }) async {}
+  }) async => calls.add('reject');
   @override
   Future<void> resolveDecision({
     required String checkpointId,
@@ -97,6 +97,98 @@ class _Repository implements AgentRepository {
 }
 
 void main() {
+  testWidgets('shows recommendation status and enables captain actions', (
+    tester,
+  ) async {
+    final auth = _Auth();
+    final repository = _Repository(
+      AgentWorkspaceSnapshot(
+        session: const AgentSession(
+          id: 'session-1',
+          title: '探索',
+          status: 'completed',
+          projectionVersion: 1,
+        ),
+        recommendations: [
+          const AgentRecommendationSet(
+            id: 'set-1',
+            status: 'displayed',
+            items: [
+              {'name': '甲店'},
+              {'name': '乙店'},
+            ],
+          ),
+        ],
+      ),
+    );
+    final controller = AgentController(repository: repository, auth: auth);
+
+    await controller.submit('找晚餐');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AgentWorkspacePanel(controller: controller)),
+      ),
+    );
+
+    expect(find.textContaining('已展示，等待队长决定'), findsOneWidget);
+    expect(find.text('选择'), findsOneWidget);
+    expect(find.text('拒绝'), findsOneWidget);
+    expect(find.textContaining('甲店'), findsOneWidget);
+
+    controller.dispose();
+    await auth.dispose();
+  });
+
+  testWidgets('disables actions for a finalized recommendation', (
+    tester,
+  ) async {
+    final auth = _Auth();
+    final repository = _Repository(
+      AgentWorkspaceSnapshot(
+        session: const AgentSession(
+          id: 'session-1',
+          title: '探索',
+          status: 'completed',
+          projectionVersion: 1,
+        ),
+        recommendations: [
+          const AgentRecommendationSet(
+            id: 'set-1',
+            status: 'captain_selected',
+            items: [
+              {'name': '甲店'},
+            ],
+          ),
+        ],
+      ),
+    );
+    final controller = AgentController(repository: repository, auth: auth);
+
+    await controller.submit('找晚餐');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AgentWorkspacePanel(controller: controller)),
+      ),
+    );
+
+    expect(find.textContaining('队长已选择'), findsOneWidget);
+    final selectButton = tester.widget<TextButton>(
+      find.widgetWithText(TextButton, '选择'),
+    );
+    final rejectButton = tester.widget<TextButton>(
+      find.widgetWithText(TextButton, '拒绝'),
+    );
+    expect(selectButton.onPressed, isNull);
+    expect(rejectButton.onPressed, isNull);
+
+    await tester.tap(find.text('选择'));
+    await tester.tap(find.text('拒绝'));
+    expect(repository.calls, isEmpty);
+
+    controller.dispose();
+    await auth.dispose();
+  });
+
   testWidgets('shows and accepts a pending memory proposal', (tester) async {
     final auth = _Auth();
     final repository = _Repository(
@@ -133,6 +225,16 @@ void main() {
     expect(find.text('记忆提案'), findsOneWidget);
     expect(find.text('保存'), findsOneWidget);
     expect(find.textContaining('海鲜'), findsOneWidget);
+    expect(find.byTooltip('收起 Agent 小队'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('收起 Agent 小队'));
+    await tester.pumpAndSettle();
+    expect(find.text('记忆提案'), findsNothing);
+    expect(find.byTooltip('展开 Agent 小队'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('展开 Agent 小队'));
+    await tester.pumpAndSettle();
+    expect(find.text('记忆提案'), findsOneWidget);
 
     await tester.tap(find.text('保存'));
     await tester.pump();

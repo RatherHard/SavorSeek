@@ -43,6 +43,7 @@ void main() {
         'recommendations': [
           {
             'id': 'set-1',
+            'status': 'displayed',
             'items': [
               {'name': '甲店', 'rank': 1},
             ],
@@ -79,6 +80,8 @@ void main() {
       expect(snapshot.session?.status, 'working');
       expect(snapshot.tasks.single.progress, 40);
       expect(snapshot.recommendations.single.items.single['name'], '甲店');
+      expect(snapshot.recommendations.single.status, 'displayed');
+      expect(snapshot.recommendations.single.canCaptainDecide, isTrue);
       expect(snapshot.events.single.type, 'task.started');
       expect(snapshot.awaitingDecision, isTrue);
       expect(snapshot.memoryProposals.single.memoryKey, 'avoid');
@@ -89,6 +92,52 @@ void main() {
             .add('花生'),
         throwsUnsupportedError,
       );
+    },
+  );
+
+  test(
+    'defaults recommendation status to generated for legacy projections',
+    () {
+      final snapshot = AgentWorkspaceSnapshot.fromJson({
+        'recommendations': [
+          {
+            'id': 'set-legacy',
+            'items': [
+              {'name': '旧店'},
+            ],
+          },
+        ],
+      });
+
+      expect(snapshot.recommendations.single.status, 'generated');
+      expect(snapshot.recommendations.single.canCaptainDecide, isTrue);
+    },
+  );
+
+  test(
+    'only generated and displayed recommendations accept captain actions',
+    () {
+      for (final status in [
+        'generated',
+        'displayed',
+        'draft',
+        'captain_selected',
+        'rejected',
+        'expired',
+        'added_to_trip',
+        'unknown',
+      ]) {
+        final set = AgentRecommendationSet(
+          id: 'set-$status',
+          items: const [],
+          status: status,
+        );
+
+        expect(
+          set.canCaptainDecide,
+          status == 'generated' || status == 'displayed',
+        );
+      }
     },
   );
 

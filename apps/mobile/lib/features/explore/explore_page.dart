@@ -298,13 +298,8 @@ class _ExplorePageState extends State<ExplorePage> {
                   if (search != null) ..._buildOverlays(search),
                   if (widget.agentController != null)
                     Positioned.fill(
-                      child: IgnorePointer(
-                        ignoring:
-                            !widget.agentController!.hasSession &&
-                            widget.agentController!.error == null,
-                        child: AgentWorkspacePanel(
-                          controller: widget.agentController!,
-                        ),
+                      child: AgentWorkspacePanel(
+                        controller: widget.agentController!,
                       ),
                     ),
                 ],
