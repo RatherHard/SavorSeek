@@ -22,6 +22,7 @@ import {
   type AgentRole,
   type OrchestrationContext,
   type PlaceCandidate,
+  type PlaceSnapshot,
 } from './types.ts';
 
 /** 阶段超时（multi-agent-arch.md 第 5 节）。 */
@@ -251,7 +252,7 @@ async function runOrchestrationInternal(
     ctx.taskType === 'plan_route' ||
     ctx.taskType === 'replan_trip';
   if (wantRoute) {
-    await runPhase(deps, ctx, 'route_planner', 'route', async (signal, _phaseTaskId) => {
+    await runPhase(deps, ctx, 'route_planner', 'route', async (signal, phaseTaskId) => {
       const route = planRoute(usable, ctx.recommendations, {
         startDate: nextDinnerDate(),
         startHour: 18,
@@ -273,7 +274,7 @@ async function runOrchestrationInternal(
       }
       const { data: tripRow, error: tripError } = await deps.serviceClient
         .from('trips')
-        .select('start_date, revision, default_travel_mode')
+        .select('start_date, revision, timezone, default_travel_mode')
         .eq('id', tripContextTripId)
         .eq('user_id', ctx.userId)
         .single();
@@ -283,6 +284,7 @@ async function runOrchestrationInternal(
         startDate: targetDate,
         startHour: 18,
         maxStops: 5,
+        timezone: typeof tripRow['timezone'] === 'string' ? tripRow['timezone'] : 'UTC',
       });
       const routePoints: GeoPoint[] = plannedRoute.stops
         .map((stop) => stop.placeSnapshot)
@@ -307,12 +309,14 @@ async function runOrchestrationInternal(
       const { data: draftRow, error } = await deps.serviceClient.from('trip_drafts').insert({
         trip_id: tripContextTripId,
         session_id: ctx.sessionId,
-        source_task_id: null,
+        source_task_id: phaseTaskId,
         base_revision: typeof ctx.context['tripRevision'] === 'number'
           ? Math.trunc(ctx.context['tripRevision'] as number)
           : Number(tripRow['revision'] ?? 1),
         status: 'proposed',
-        items: toTripDraftItems(plannedRoute.stops, ctx.recommendations, placeIds),
+        items: toTripDraftItems(plannedRoute.stops, ctx.recommendations, new Map(
+          [...placeIds].map(([providerId, row]) => [providerId, String(row['id'])]),
+        )),
         route_segments: routePath,
         warnings: plannedRoute.warnings,
         requires_captain_approval: true,
@@ -325,6 +329,7 @@ async function runOrchestrationInternal(
         .from('decision_checkpoints')
         .insert({
           session_id: ctx.sessionId,
+          task_id: phaseTaskId,
           kind: 'apply_trip_draft',
           question: '路线草案需要更新当前行程，是否应用？',
           options: [
@@ -356,14 +361,18 @@ async function runOrchestrationInternal(
   // ── Phase F：Present 汇总落库 ────────────────────────────────────
   const presentOutcome = await runPhase(deps, ctx, 'result_coordinator', 'present', async (_signal, _phaseTaskId) => {
     const placeIds = await persistPlaces(deps, usable);
-    ctx.recommendations = ctx.recommendations.map((item) => ({
-      ...item,
-      placeId: placeIds.get(item.name) ?? item.placeId,
-    }));
+    ctx.recommendations = ctx.recommendations.map((item) => {
+      const place = placeIds.get(item.providerPlaceId);
+      return {
+        ...item,
+        placeId: place ? String(place['id']) : item.placeId,
+        placeSnapshot: place ? toPlaceSnapshot(place) : undefined,
+      };
+    });
     const artifact = {
       session_id: ctx.sessionId,
       task_id: ctx.taskId,
-      schema_version: 1,
+      schema_version: 2,
       artifact_type: 'recommendation_set',
       producer: 'result_coordinator',
       payload: { items: ctx.recommendations, warnings: ctx.degraded },
@@ -485,9 +494,10 @@ async function proposeMemoryFromIntent(deps: OrchestrationDeps, ctx: Orchestrati
 async function persistPlaces(
   deps: OrchestrationDeps,
   places: PlaceCandidate[],
-): Promise<Map<string, string>> {
-  const placeIds = new Map<string, string>();
+): Promise<Map<string, Record<string, unknown>>> {
+  const placeRows = new Map<string, Record<string, unknown>>();
   for (const place of places) {
+    const fetchedAt = new Date().toISOString();
     const { data, error } = await deps.serviceClient
       .from('places')
       .upsert({
@@ -499,14 +509,41 @@ async function persistPlaces(
         latitude: place.latitude,
         longitude: place.longitude,
         coordinate_system: 'gcj02',
-        fetched_at: new Date().toISOString(),
+        fetched_at: fetchedAt,
       }, { onConflict: 'provider,provider_place_id' })
-      .select('id')
+      .select('id, provider_place_id, name, category, address, latitude, longitude, coordinate_system, fetched_at')
       .single();
     if (error || !data) throw new OrchestrationError('place_cache_write_failed', error?.message ?? '地点缓存写入失败');
-    placeIds.set(place.name, String((data as Record<string, unknown>)['id']));
+    placeRows.set(place.provider_place_id, {
+      ...(data as Record<string, unknown>),
+      provider: 'amap',
+      fetched_at: String((data as Record<string, unknown>)['fetched_at'] ?? fetchedAt),
+      rating: place.rating,
+      cuisine_tags: place.cuisine_tags,
+      price_level: place.price_level,
+      business_status: place.business_status,
+    });
   }
-  return placeIds;
+  return placeRows;
+}
+
+function toPlaceSnapshot(place: Record<string, unknown>): PlaceSnapshot {
+  return {
+    id: String(place['id']),
+    provider_place_id: String(place['provider_place_id']),
+    name: String(place['name']),
+    category: (place['category'] as string | null) ?? null,
+    address: (place['address'] as string | null) ?? null,
+    latitude: (place['latitude'] as number | null) ?? null,
+    longitude: (place['longitude'] as number | null) ?? null,
+    rating: (place['rating'] as number | null) ?? null,
+    cuisine_tags: (place['cuisine_tags'] as string[] | null) ?? null,
+    price_level: (place['price_level'] as number | null) ?? null,
+    business_status: (place['business_status'] as 'open' | 'closed' | 'unknown' | null) ?? null,
+    provenance: 'amap',
+    coordinate_system: (place['coordinate_system'] as 'gcj02' | 'wgs84') ?? 'gcj02',
+    fetched_at: String(place['fetched_at']),
+  };
 }
 
 /** 路线默认锚定“今天/明天 18:00”晚餐（MVP：无会话内具体日期时使用）。 */
