@@ -922,6 +922,7 @@ function extractCurrentLocation(context: unknown): { latitude: number; longitude
   return null;
 }
 
+function intentSummary(intent: NonNullable<OrchestrationContext['intent']>): string {
   const parts: string[] = [];
   if (intent.city) parts.push(`城市 ${intent.city}`);
   if (intent.area) parts.push(`区域 ${intent.area}`);
