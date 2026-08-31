@@ -28,6 +28,22 @@ import 'package:savorseek/features/location/location_service.dart';
 import 'package:savorseek/features/trip/add_place_to_trip.dart';
 import 'package:savorseek/features/trip/schedule_picker_sheet.dart';
 
+/// Explore 页首次定位时使用的地图缩放级别。
+const double _exploreLocationZoom = 15;
+
+/// 计算首次定位时的相机位置。
+CameraPosition cameraForDeviceLocation(DeviceLocation location) =>
+    CameraPosition(
+      target: LatLng(location.latitude, location.longitude),
+      zoom: _exploreLocationZoom,
+    );
+
+/// 地点详情打开时隐藏 Agent 工作区，关闭后恢复。
+bool shouldShowExploreAgentPanel({
+  required bool hasAgentController,
+  required bool hasSelectedPlace,
+}) => hasAgentController && !hasSelectedPlace;
+
 /// 探索页（P-MAP）。
 ///
 /// 布局约束来自 `docs/develop/1.前端基础结构开发.md`：地图占据除底部
@@ -103,8 +119,11 @@ class _ExplorePageState extends State<ExplorePage> {
   bool _isAddingToTrip = false;
   String? _agentProjectionKey;
   DeviceLocation? _mapLocation;
+  bool _hasCenteredOnLocation = false;
   NearbyRecommendationBootstrap? _nearbyBootstrap;
   bool get _ownsNearbyBootstrap => widget.nearbyBootstrap == null;
+
+  static const double _locationCameraZoom = _exploreLocationZoom;
   @override
   void initState() {
     super.initState();
@@ -170,13 +189,31 @@ class _ExplorePageState extends State<ExplorePage> {
     if (service is! AmapLocationService) return;
     service.update(location);
     try {
-      _mapLocation = DeviceLocation.validated(
+      final deviceLocation = DeviceLocation.validated(
         latitude: location.latLng.latitude,
         longitude: location.latLng.longitude,
       );
+      _mapLocation = deviceLocation;
+      _centerMapOnLocation(deviceLocation);
     } on LocationException {
       // The service owns the error; keep platform callbacks non-throwing.
     }
+  }
+
+  void _centerMapOnLocation(DeviceLocation location) {
+    if (!mounted) return;
+    final controller = _mapController;
+    if (_hasCenteredOnLocation || controller == null) return;
+    _hasCenteredOnLocation = true;
+    _lastCameraPosition = cameraForDeviceLocation(location);
+    unawaited(
+      controller.moveCamera(
+        CameraUpdate.newLatLngZoom(
+          LatLng(location.latitude, location.longitude),
+          _locationCameraZoom,
+        ),
+      ),
+    );
   }
 
   void _onCameraMoveEnd(CameraPosition position) {
@@ -193,7 +230,16 @@ class _ExplorePageState extends State<ExplorePage> {
   void _onMapCreated(AMapController controller) {
     _mapController = controller;
     _lastCameraPosition = AmapSurface.initialCamera;
+    if (_mapLocation case final location?) _centerMapOnLocation(location);
     if (widget.isActive) unawaited(_nearbyBootstrap?.start());
+  }
+
+  @override
+  void didUpdateWidget(covariant ExplorePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.isActive && widget.isActive) {
+      unawaited(_nearbyBootstrap?.start());
+    }
   }
 
   @override
@@ -313,8 +359,14 @@ class _ExplorePageState extends State<ExplorePage> {
                   if (search != null) ..._buildOverlays(search),
                   if (widget.agentController != null)
                     Positioned.fill(
-                      child: AgentWorkspacePanel(
-                        controller: widget.agentController!,
+                      child: Offstage(
+                        offstage: !shouldShowExploreAgentPanel(
+                          hasAgentController: widget.agentController != null,
+                          hasSelectedPlace: search?.selected != null,
+                        ),
+                        child: AgentWorkspacePanel(
+                          controller: widget.agentController!,
+                        ),
                       ),
                     ),
                 ],
