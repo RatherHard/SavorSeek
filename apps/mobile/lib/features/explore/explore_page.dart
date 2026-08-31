@@ -73,9 +73,6 @@ class ExplorePage extends StatefulWidget {
 }
 
 class _ExplorePageState extends State<ExplorePage> {
-  /// 默认检索城市。定位能力接入前的回退值，与地图默认视野保持一致。
-  static const String _defaultCity = '大连';
-
   /// 合规同意状态。注入时与行程页共享，否则本页自持。
   late final AmapConsent _consent = widget.consent ?? AmapConsent();
 
@@ -98,15 +95,13 @@ class _ExplorePageState extends State<ExplorePage> {
   Object? _markersSource;
 
   AMapController? _mapController;
-  Timer? _viewportDebounce;
-  String? _scheduledViewportKey;
   Size? _mapSize;
   CameraPosition? _lastCameraPosition;
   MapMarkerSelectionResult? _markerSelection;
   bool _isAddingToTrip = false;
   String? _agentProjectionKey;
-  NearbyRecommendationBootstrap? _nearbyBootstrap;
   DeviceLocation? _mapLocation;
+  NearbyRecommendationBootstrap? _nearbyBootstrap;
 
   @override
   void initState() {
@@ -167,91 +162,39 @@ class _ExplorePageState extends State<ExplorePage> {
   }
 
   void _onMapLocationChanged(AMapLocation location) {
+    final service = widget.locationService;
+    if (service is! AmapLocationService) return;
+    service.update(location);
     try {
-      final currentLocation = DeviceLocation.validated(
+      _mapLocation = DeviceLocation.validated(
         latitude: location.latLng.latitude,
         longitude: location.latLng.longitude,
       );
-      _mapLocation = currentLocation;
-      if (widget.isActive && _nearbyBootstrap?.isLoading != true) {
-        unawaited(
-          widget.agentController?.submitNearbyFoodRecommendations(
-            location: currentLocation,
-          ),
-        );
-      }
     } on LocationException {
-      return;
+      // The service owns the error; keep platform callbacks non-throwing.
     }
   }
 
   void _onCameraMoveEnd(CameraPosition position) {
     _lastCameraPosition = position;
-    final size = _mapSize;
-    if (size != null) {
-      _refreshMarkerSelection();
-      _scheduleViewportSearch(position, size);
-    }
+    _refreshMarkerSelection();
   }
 
   void _onMapSizeChanged(Size size) {
     if (size.width <= 0 || size.height <= 0 || size == _mapSize) return;
     _mapSize = size;
-    final position = _lastCameraPosition;
-    if (position != null) _scheduleViewportSearch(position, size);
     _refreshMarkerSelection();
-  }
-
-  void _scheduleViewportSearch(CameraPosition position, Size size) {
-    final search = _search;
-    if (search == null ||
-        widget.auth?.isSignedIn != true ||
-        _nearbyBootstrap?.isLoading == true) {
-      return;
-    }
-
-    _viewportDebounce?.cancel();
-    _viewportDebounce = Timer(const Duration(milliseconds: 400), () {
-      if (!mounted) return;
-      final query = buildMapViewportQuery(
-        latitude: position.target.latitude,
-        longitude: position.target.longitude,
-        zoom: position.zoom,
-        width: size.width,
-        height: size.height,
-      );
-      if (query == null || query.key == _scheduledViewportKey) {
-        return;
-      }
-      _scheduledViewportKey = query.key;
-      unawaited(() async {
-        await search.searchAround(
-          latitude: query.center.latitude,
-          longitude: query.center.longitude,
-          radiusMeters: query.radiusMeters,
-          queryKey: query.key,
-        );
-        if (mounted && _scheduledViewportKey == query.key) {
-          _scheduledViewportKey = null;
-        }
-      }());
-    });
   }
 
   void _onMapCreated(AMapController controller) {
     _mapController = controller;
     _lastCameraPosition = AmapSurface.initialCamera;
     if (widget.isActive) unawaited(_nearbyBootstrap?.start());
-    final size = _mapSize;
-    if (_nearbyBootstrap?.isLoading != true && size != null) {
-      _scheduleViewportSearch(AmapSurface.initialCamera, size);
-    }
   }
 
   @override
   void dispose() {
     _consent.removeListener(_onConsentChanged);
-    _viewportDebounce?.cancel();
     if (_ownsConsent) _consent.dispose();
     _search?.removeListener(_onSearchChanged);
     widget.favoriteController?.removeListener(_onFavoritesChanged);
@@ -264,45 +207,32 @@ class _ExplorePageState extends State<ExplorePage> {
 
   Future<void> _submitCommand(String command) async {
     final agent = widget.agentController;
-    if (agent != null) {
-      if (widget.auth?.isSignedIn != true) {
-        final auth = widget.auth;
-        if (auth != null) await showAuthSheet(context, auth: auth);
-        return;
-      }
-      final position = _lastCameraPosition ?? AmapSurface.initialCamera;
-      final size = _mapSize;
-      final viewport = size == null
-          ? null
-          : buildMapViewportQuery(
-              latitude: position.target.latitude,
-              longitude: position.target.longitude,
-              zoom: position.zoom,
-              width: size.width,
-              height: size.height,
-            );
-      final submitContext = AgentSubmitContext(
-        mapViewport: viewport == null
-            ? null
-            : AgentMapViewport.fromQuery(viewport),
-        selectedPlaceIds: [?_search?.selected?.id],
-      );
-      _search?.clearAgentResult();
-      _agentProjectionKey = null;
-      if (_isRouteCommand(command)) {
-        await agent.submitRoute(command, context: submitContext);
-      } else {
-        await agent.submit(command, context: submitContext);
-      }
+    if (agent == null) {
+      _showMessage('Agent 服务尚未配置，无法加载探索推荐。');
       return;
     }
-    await _search?.searchByKeywords(command, city: _defaultCity);
+    if (widget.auth?.isSignedIn != true) {
+      final auth = widget.auth;
+      if (auth != null) await showAuthSheet(context, auth: auth);
+      return;
+    }
+    final locationService = widget.locationService;
+    if (locationService == null) {
+      _showMessage('暂时无法获取当前位置，请重试。');
+      return;
+    }
+    final location = await locationService.getCurrentLocation();
     if (!mounted) return;
-    final state = _search?.state;
-    if (state is PlaceSearchLoaded) {
-      await widget.favoriteController?.loadFavoritePlaceIds(
-        placeIds: state.places.map((place) => place.id),
-      );
+    final submitContext = AgentSubmitContext(
+      currentLocation: location,
+      selectedPlaceIds: [?_search?.selected?.id],
+    );
+    _search?.clearAgentResult();
+    _agentProjectionKey = null;
+    if (_isRouteCommand(command)) {
+      await agent.submitRoute(command, context: submitContext);
+    } else {
+      await agent.submit(command, context: submitContext);
     }
   }
 
@@ -394,6 +324,8 @@ class _ExplorePageState extends State<ExplorePage> {
           // 后者会让两次结果竞争。
           onSubmit:
               search == null ||
+                  widget.agentController == null ||
+                  widget.locationService == null ||
                   search.isLoading ||
                   widget.agentController?.isSubmitting == true ||
                   widget.agentController?.isCreatingRouteTrip == true
@@ -426,8 +358,7 @@ class _ExplorePageState extends State<ExplorePage> {
 
   List<Widget> _buildOverlays(PlaceSearchController search) {
     final selected = search.selected;
-    final notice = _statusNotice(search);
-    final foodPlaces = filterFoodPlaces(search.visiblePlaces);
+    final places = search.visiblePlaces;
 
     return [
       if (search.isLoading)
@@ -436,13 +367,6 @@ class _ExplorePageState extends State<ExplorePage> {
           left: 0,
           right: 0,
           child: Center(child: _SearchingChip()),
-        ),
-      if (notice != null && selected == null)
-        Positioned(
-          left: AppTokens.spaceMd,
-          right: AppTokens.spaceMd,
-          bottom: AppTokens.spaceMd,
-          child: notice,
         ),
       if (_nearbyBootstrap?.error != null && selected == null)
         Positioned(
@@ -456,12 +380,12 @@ class _ExplorePageState extends State<ExplorePage> {
           ),
         ),
       if (widget.favoriteController != null &&
-          (foodPlaces.isNotEmpty || _hasPartialResult(search)))
+          (places.isNotEmpty || _hasPartialResult(search)))
         Positioned.fill(
           child: Offstage(
             offstage: selected != null,
             child: PlaceResultsDrawer(
-              places: foodPlaces,
+              places: places,
               favorites: widget.favoriteController!,
               selectedPlaceId: selected?.id,
               onSelect: _selectPlaceFromList,
@@ -526,52 +450,6 @@ class _ExplorePageState extends State<ExplorePage> {
     return state is PlaceSearchLoaded && state.result.isPartial;
   }
 
-  ///
-  /// 设计文档 §12 明确要求不能一律显示「暂未找到」：空结果、数据源不可用、
-  /// 视野无效、未登录是不同的成因，对应的下一步动作也不同。
-  Widget? _statusNotice(PlaceSearchController search) {
-    return switch (search.state) {
-      PlaceSearchEmpty(
-        :final keywords,
-        :final source,
-        :final hasPreviousResult,
-      ) =>
-        _MapNotice(
-          icon: Icons.search_off,
-          message: source == PlaceSearchSource.viewport
-              ? (hasPreviousResult
-                    ? '当前地图范围暂无新的地点，仍保留上一批结果。'
-                    : '当前地图范围暂无符合条件的地点。')
-              : '没有找到与「$keywords」相符的地点。换个说法或扩大范围再试试。',
-        ),
-      PlaceSearchLoaded(:final result) when result.isPartial => _MapNotice(
-        icon: Icons.warning_amber_outlined,
-        message: '部分地点已加载，部分区域暂不可用。',
-        onRetry: search.retry,
-      ),
-      PlaceSearchFailed(:final message, :final failure, :final isRetryable) =>
-        _MapNotice(
-          icon: _iconFor(failure),
-          message: message,
-          onRetry: isRetryable ? () => search.retry(city: _defaultCity) : null,
-        ),
-      _ => null,
-    };
-  }
-
-  static IconData _iconFor(PlaceSearchFailure failure) {
-    return switch (failure) {
-      PlaceSearchFailure.network => Icons.wifi_off,
-      PlaceSearchFailure.unauthenticated => Icons.lock_outline,
-      PlaceSearchFailure.providerKeyMissing ||
-      PlaceSearchFailure.providerKeyRejected ||
-      PlaceSearchFailure.notConfigured => Icons.vpn_key_off_outlined,
-      PlaceSearchFailure.providerQuotaExceeded => Icons.hourglass_bottom,
-      PlaceSearchFailure.invalidRequest => Icons.error_outline,
-      _ => Icons.cloud_off,
-    };
-  }
-
   Widget _buildMapArea() {
     // iOS 的 Key 只能经 Dart 注入，缺失时显式说明，避免白屏无法区分
     // 「未配置」「鉴权失败」「网络异常」三种原因。
@@ -590,10 +468,11 @@ class _ExplorePageState extends State<ExplorePage> {
     }
 
     if (_nearbyBootstrap?.isLoading == true) {
-      return const Stack(
+      return Stack(
         children: [
-          Positioned.fill(child: ColoredBox(color: Colors.black12)),
-          Center(child: CircularProgressIndicator()),
+          _buildMapSurface(),
+          const Positioned.fill(child: ColoredBox(color: Colors.black12)),
+          const Center(child: CircularProgressIndicator()),
         ],
       );
     }
