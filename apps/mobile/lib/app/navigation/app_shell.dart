@@ -76,6 +76,8 @@ class _AppShellState extends State<AppShell> {
               scheduler: widget.dependencies.scheduler,
               consent: widget.dependencies.mapConsent,
               agentController: _agent,
+              locationService: widget.dependencies.locationService,
+              isActive: _current == AppDestination.explore,
             ),
             TripListPage(
               repository: widget.dependencies.tripRepository,

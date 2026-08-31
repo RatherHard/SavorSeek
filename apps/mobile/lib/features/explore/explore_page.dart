@@ -13,6 +13,7 @@ import 'package:savorseek/features/agent/agent_place_projection.dart';
 import 'package:savorseek/features/agent/agent_workspace_panel.dart';
 import 'package:savorseek/features/explore/amap_consent.dart';
 import 'package:savorseek/features/explore/amap_surface.dart';
+import 'package:savorseek/features/explore/nearby_recommendation_bootstrap.dart';
 import 'package:savorseek/features/explore/place_results_drawer.dart';
 import 'package:savorseek/features/explore/map_viewport.dart';
 import 'package:savorseek/features/explore/map_marker_selection.dart';
@@ -23,6 +24,7 @@ import 'package:savorseek/features/places/place_detail_sheet.dart';
 import 'package:savorseek/features/places/place_models.dart';
 import 'package:savorseek/features/places/place_repository.dart';
 import 'package:savorseek/features/places/place_search_controller.dart';
+import 'package:savorseek/features/location/location_service.dart';
 import 'package:savorseek/features/trip/add_place_to_trip.dart';
 import 'package:savorseek/features/trip/schedule_picker_sheet.dart';
 
@@ -43,6 +45,8 @@ class ExplorePage extends StatefulWidget {
     this.scheduler,
     this.consent,
     this.agentController,
+    this.locationService,
+    this.isActive = true,
   });
 
   /// 地点检索仓库。为空时检索入口禁用（未注入后端依赖的场景）。
@@ -61,6 +65,8 @@ class ExplorePage extends StatefulWidget {
   final AuthService? auth;
 
   final AgentController? agentController;
+  final LocationService? locationService;
+  final bool isActive;
 
   @override
   State<ExplorePage> createState() => _ExplorePageState();
@@ -99,6 +105,8 @@ class _ExplorePageState extends State<ExplorePage> {
   MapMarkerSelectionResult? _markerSelection;
   bool _isAddingToTrip = false;
   String? _agentProjectionKey;
+  NearbyRecommendationBootstrap? _nearbyBootstrap;
+  DeviceLocation? _mapLocation;
 
   @override
   void initState() {
@@ -111,6 +119,18 @@ class _ExplorePageState extends State<ExplorePage> {
       _search = PlaceSearchController(repository)
         ..addListener(_onSearchChanged);
     }
+    if (widget.locationService != null && widget.agentController != null) {
+      _nearbyBootstrap = NearbyRecommendationBootstrap(
+        locationService: widget.locationService!,
+        agentController: widget.agentController!,
+        auth: widget.auth ?? const UnavailableAuthService(),
+      );
+      _nearbyBootstrap!.addListener(_onNearbyChanged);
+    }
+  }
+
+  void _onNearbyChanged() {
+    if (mounted) setState(() {});
   }
 
   void _onConsentChanged() => setState(() {});
@@ -146,6 +166,25 @@ class _ExplorePageState extends State<ExplorePage> {
     setState(() {});
   }
 
+  void _onMapLocationChanged(AMapLocation location) {
+    try {
+      final currentLocation = DeviceLocation.validated(
+        latitude: location.latLng.latitude,
+        longitude: location.latLng.longitude,
+      );
+      _mapLocation = currentLocation;
+      if (widget.isActive && _nearbyBootstrap?.isLoading != true) {
+        unawaited(
+          widget.agentController?.submitNearbyFoodRecommendations(
+            location: currentLocation,
+          ),
+        );
+      }
+    } on LocationException {
+      return;
+    }
+  }
+
   void _onCameraMoveEnd(CameraPosition position) {
     _lastCameraPosition = position;
     final size = _mapSize;
@@ -165,7 +204,11 @@ class _ExplorePageState extends State<ExplorePage> {
 
   void _scheduleViewportSearch(CameraPosition position, Size size) {
     final search = _search;
-    if (search == null || widget.auth?.isSignedIn != true) return;
+    if (search == null ||
+        widget.auth?.isSignedIn != true ||
+        _nearbyBootstrap?.isLoading == true) {
+      return;
+    }
 
     _viewportDebounce?.cancel();
     _viewportDebounce = Timer(const Duration(milliseconds: 400), () {
@@ -177,7 +220,9 @@ class _ExplorePageState extends State<ExplorePage> {
         width: size.width,
         height: size.height,
       );
-      if (query == null || query.key == _scheduledViewportKey) return;
+      if (query == null || query.key == _scheduledViewportKey) {
+        return;
+      }
       _scheduledViewportKey = query.key;
       unawaited(() async {
         await search.searchAround(
@@ -196,8 +241,11 @@ class _ExplorePageState extends State<ExplorePage> {
   void _onMapCreated(AMapController controller) {
     _mapController = controller;
     _lastCameraPosition = AmapSurface.initialCamera;
+    if (widget.isActive) unawaited(_nearbyBootstrap?.start());
     final size = _mapSize;
-    if (size != null) _scheduleViewportSearch(AmapSurface.initialCamera, size);
+    if (_nearbyBootstrap?.isLoading != true && size != null) {
+      _scheduleViewportSearch(AmapSurface.initialCamera, size);
+    }
   }
 
   @override
@@ -208,6 +256,8 @@ class _ExplorePageState extends State<ExplorePage> {
     _search?.removeListener(_onSearchChanged);
     widget.favoriteController?.removeListener(_onFavoritesChanged);
     widget.agentController?.removeListener(_onAgentChanged);
+    _nearbyBootstrap?.removeListener(_onNearbyChanged);
+    _nearbyBootstrap?.dispose();
     _search?.dispose();
     super.dispose();
   }
@@ -387,14 +437,23 @@ class _ExplorePageState extends State<ExplorePage> {
           right: 0,
           child: Center(child: _SearchingChip()),
         ),
-      // 状态提示浮在地图上方而非替换地图：即使检索失败，用户仍应能继续浏览底图
-      // （设计文档 §12「允许查看已有结果」）。
       if (notice != null && selected == null)
         Positioned(
           left: AppTokens.spaceMd,
           right: AppTokens.spaceMd,
           bottom: AppTokens.spaceMd,
           child: notice,
+        ),
+      if (_nearbyBootstrap?.error != null && selected == null)
+        Positioned(
+          left: AppTokens.spaceMd,
+          right: AppTokens.spaceMd,
+          bottom: AppTokens.spaceMd,
+          child: _MapNotice(
+            icon: Icons.location_off_outlined,
+            message: _nearbyBootstrap!.error!.message,
+            onRetry: _nearbyBootstrap!.retry,
+          ),
         ),
       if (widget.favoriteController != null &&
           (foodPlaces.isNotEmpty || _hasPartialResult(search)))
@@ -530,11 +589,31 @@ class _ExplorePageState extends State<ExplorePage> {
       return AmapConsentNotice(onAgree: _consent.agree);
     }
 
+    if (_nearbyBootstrap?.isLoading == true) {
+      return const Stack(
+        children: [
+          Positioned.fill(child: ColoredBox(color: Colors.black12)),
+          Center(child: CircularProgressIndicator()),
+        ],
+      );
+    }
+    return _buildMapSurface();
+  }
+
+  Widget _buildMapSurface() {
     return AmapSurface(
       markers: _resolveMarkers(),
+      initialCameraPosition: _mapLocation == null
+          ? null
+          : CameraPosition(
+              target: LatLng(_mapLocation!.latitude, _mapLocation!.longitude),
+              zoom: 15,
+            ),
       onMapCreated: _onMapCreated,
       onMapTap: (_) => _search?.clearSelection(),
       onCameraMoveEnd: _onCameraMoveEnd,
+      onLocationChanged: _onMapLocationChanged,
+      showUserLocation: widget.locationService != null,
     );
   }
 

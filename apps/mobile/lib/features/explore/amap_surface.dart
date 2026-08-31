@@ -20,6 +20,7 @@ class AmapSurface extends StatefulWidget {
     this.onMapTap,
     this.onCameraMoveEnd,
     this.onLocationChanged,
+    this.showUserLocation = false,
     this.initialCameraPosition,
     this.gesturesEnabled = true,
     this.eagerGestures = true,
@@ -41,6 +42,7 @@ class AmapSurface extends StatefulWidget {
 
   /// 转发高德 SDK 提供的当前位置（坐标已与高德地图保持一致）。
   final void Function(AMapLocation location)? onLocationChanged;
+  final bool showUserLocation;
 
   /// 初始视野。为空时用 [initialCamera]。
   final CameraPosition? initialCameraPosition;
@@ -109,6 +111,9 @@ class _AmapSurfaceState extends State<AmapSurface> {
       onTap: widget.onMapTap,
       onCameraMoveEnd: widget.onCameraMoveEnd,
       onLocationChanged: widget.onLocationChanged,
+      myLocationStyleOptions: widget.showUserLocation
+          ? MyLocationStyleOptions(true)
+          : null,
       // 全屏地图需要单指拖拽与双指缩放；嵌入式小地图关闭手势，避免与页面滚动
       // 争夺同一个纵向拖拽。
       scrollGesturesEnabled: widget.gesturesEnabled,
