@@ -1,10 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import 'package:savorseek/app/theme/design_tokens.dart';
 import 'package:savorseek/features/agent/agent_controller.dart';
 import 'package:savorseek/features/agent/agent_memory_proposal_sheet.dart';
 import 'package:savorseek/features/agent/agent_models.dart';
 
-class AgentWorkspacePanel extends StatelessWidget {
+class AgentWorkspacePanel extends StatefulWidget {
   const AgentWorkspacePanel({
     super.key,
     required this.controller,
@@ -15,41 +18,148 @@ class AgentWorkspacePanel extends StatelessWidget {
   final int? tripRevision;
 
   @override
+  State<AgentWorkspacePanel> createState() => _AgentWorkspacePanelState();
+}
+
+class _AgentWorkspacePanelState extends State<AgentWorkspacePanel> {
+  bool _isExpanded = true;
+  Timer? _collapseTimer;
+
+  @override
+  void dispose() {
+    _collapseTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
     final snapshot = controller.snapshot;
     if (!controller.hasSession && controller.error == null) {
       return const SizedBox.shrink();
     }
-    return Align(
-      alignment: Alignment.topRight,
-      child: Card(
-        margin: const EdgeInsets.all(12),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 360, maxHeight: 320),
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableWidth = constraints.hasBoundedWidth
+            ? (constraints.maxWidth - 24)
+                  .clamp(48.0, double.infinity)
+                  .toDouble()
+            : 360.0;
+        final expandedWidth = availableWidth.clamp(48.0, 360.0).toDouble();
+        final expandedHeight = constraints.hasBoundedHeight
+            ? (constraints.maxHeight - 24).clamp(48.0, 320.0).toDouble()
+            : 320.0;
+        final panelWidth = _isExpanded ? expandedWidth : 52.0;
+        final panelHeight = _isExpanded ? expandedHeight : 52.0;
+
+        return Align(
+          alignment: Alignment.topRight,
           child: Padding(
             padding: const EdgeInsets.all(12),
-            child: controller.error != null
-                ? _ErrorView(controller: controller)
-                : _SessionView(
-                    controller: controller,
-                    snapshot: snapshot,
-                    tripRevision: tripRevision,
-                  ),
+            child: AnimatedContainer(
+              duration: AppTokens.durationNormal,
+              curve: Curves.easeOut,
+              width: panelWidth,
+              height: panelHeight,
+              child: ClipRect(
+                child: _isExpanded
+                    ? OverflowBox(
+                        alignment: Alignment.topRight,
+                        minWidth: expandedWidth,
+                        maxWidth: expandedWidth,
+                        minHeight: expandedHeight,
+                        maxHeight: expandedHeight,
+                        child: Card(
+                          margin: EdgeInsets.zero,
+                          clipBehavior: Clip.antiAlias,
+                          child: _ExpandedPanel(
+                            controller: controller,
+                            snapshot: snapshot,
+                            tripRevision: widget.tripRevision,
+                            onCollapse: () =>
+                                setState(() => _isExpanded = false),
+                          ),
+                        ),
+                      )
+                    : Card(
+                        margin: EdgeInsets.zero,
+                        clipBehavior: Clip.antiAlias,
+                        child: _CollapsedPanel(
+                          onExpand: () => setState(() => _isExpanded = true),
+                        ),
+                      ),
+              ),
+            ),
           ),
-        ),
+        );
+      },
+    );
+  }
+}
+
+class _CollapsedPanel extends StatelessWidget {
+  const _CollapsedPanel({required this.onExpand});
+
+  final VoidCallback onExpand;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label: '展开 Agent 小队',
+    child: Center(
+      child: IconButton(
+        onPressed: onExpand,
+        icon: const Icon(Icons.groups_outlined),
+        tooltip: '展开 Agent 小队',
       ),
+    ),
+  );
+}
+
+class _ExpandedPanel extends StatelessWidget {
+  const _ExpandedPanel({
+    required this.controller,
+    required this.snapshot,
+    required this.tripRevision,
+    required this.onCollapse,
+  });
+
+  final AgentController controller;
+  final AgentWorkspaceSnapshot snapshot;
+  final int? tripRevision;
+  final VoidCallback onCollapse;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: controller.error != null
+          ? _ErrorView(controller: controller, onCollapse: onCollapse)
+          : _SessionView(
+              controller: controller,
+              snapshot: snapshot,
+              tripRevision: tripRevision,
+              onCollapse: onCollapse,
+            ),
     );
   }
 }
 
 class _ErrorView extends StatelessWidget {
-  const _ErrorView({required this.controller});
+  const _ErrorView({required this.controller, required this.onCollapse});
   final AgentController controller;
+  final VoidCallback onCollapse;
 
   @override
   Widget build(BuildContext context) => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
+      IconButton(
+        onPressed: onCollapse,
+        icon: const Icon(Icons.chevron_right),
+        tooltip: '收起 Agent 小队',
+      ),
       Expanded(
         child: Text(
           controller.error ?? 'Agent 暂不可用，请稍后重试。',
@@ -77,10 +187,12 @@ class _SessionView extends StatelessWidget {
     required this.controller,
     required this.snapshot,
     this.tripRevision,
+    required this.onCollapse,
   });
   final AgentController controller;
   final AgentWorkspaceSnapshot snapshot;
   final int? tripRevision;
+  final VoidCallback onCollapse;
 
   @override
   Widget build(BuildContext context) {
@@ -95,6 +207,11 @@ class _SessionView extends StatelessWidget {
                 session?.title ?? 'Agent 小队',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
+            ),
+            IconButton(
+              onPressed: onCollapse,
+              icon: const Icon(Icons.chevron_right),
+              tooltip: '收起 Agent 小队',
             ),
             if (session?.status == 'working' ||
                 session?.status == 'dispatching')
@@ -117,8 +234,13 @@ class _SessionView extends StatelessWidget {
                   controller: controller,
                   set: recommendation,
                 ),
+              if (snapshot.draft != null)
+                _DraftTile(controller: controller, draft: snapshot.draft!),
               for (final decision in snapshot.decisions.where(
-                (item) => item['status'] == 'pending',
+                (item) =>
+                    item['status'] == 'pending' &&
+                    !(snapshot.draft != null &&
+                        item['kind'] == 'apply_trip_draft'),
               ))
                 _DecisionTile(
                   controller: controller,
@@ -165,34 +287,106 @@ class _RecommendationTile extends StatelessWidget {
   final AgentRecommendationSet set;
 
   @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      ListTile(
-        dense: true,
-        leading: const Icon(Icons.restaurant_outlined),
-        title: Text('${set.items.length} 条推荐'),
-        subtitle: Text(
-          set.items.take(2).map((item) => '${item['name'] ?? '地点'}').join('、'),
+  Widget build(BuildContext context) {
+    final canDecide = set.canCaptainDecide;
+    return Column(
+      children: [
+        ListTile(
+          dense: true,
+          leading: const Icon(Icons.restaurant_outlined),
+          title: Text('${set.items.length} 条推荐'),
+          subtitle: Text(
+            '${_recommendationStatusLabel(set.status)}\n'
+            '${set.items.take(2).map((item) => '${item['name'] ?? '地点'}').join('、')}',
+          ),
+        ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            TextButton.icon(
+              onPressed: canDecide
+                  ? () => controller.selectRecommendation(set)
+                  : null,
+              icon: const Icon(Icons.check),
+              label: const Text('选择'),
+            ),
+            TextButton.icon(
+              onPressed: canDecide
+                  ? () => controller.rejectRecommendation(set)
+                  : null,
+              icon: const Icon(Icons.close),
+              label: const Text('拒绝'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _DraftTile extends StatelessWidget {
+  const _DraftTile({required this.controller, required this.draft});
+
+  final AgentController controller;
+  final AgentTripDraft draft;
+
+  @override
+  Widget build(BuildContext context) {
+    final names = draft.placeNames;
+    return Card(
+      margin: const EdgeInsets.only(top: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.route_outlined),
+              title: Text(draft.title ?? '美食路线规划'),
+              subtitle: Text(
+                '${names.length} 个地点 · ${_draftStatusLabel(draft.status)}',
+              ),
+            ),
+            if (names.isNotEmpty) Text(names.join('、')),
+            for (final warning in draft.warnings)
+              Text(
+                warning,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed:
+                    draft.canApply &&
+                        draft.id.isNotEmpty &&
+                        draft.baseRevision != null
+                    ? () => unawaited(
+                        controller.applyDraft(
+                          draftId: draft.id,
+                          expectedRevision: draft.baseRevision!,
+                        ),
+                      )
+                    : null,
+                icon: const Icon(Icons.check),
+                label: const Text('应用草案'),
+              ),
+            ),
+          ],
         ),
       ),
-      Row(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          TextButton.icon(
-            onPressed: () => controller.selectRecommendation(set),
-            icon: const Icon(Icons.check),
-            label: const Text('选择'),
-          ),
-          TextButton.icon(
-            onPressed: () => controller.rejectRecommendation(set),
-            icon: const Icon(Icons.close),
-            label: const Text('拒绝'),
-          ),
-        ],
-      ),
-    ],
-  );
+    );
+  }
 }
+
+String _draftStatusLabel(String status) => switch (status) {
+  'proposed' => '待确认',
+  'shown_to_captain' => '待确认',
+  'applied' => '已应用',
+  'rejected' => '已拒绝',
+  _ => status,
+};
 
 class _DecisionTile extends StatelessWidget {
   const _DecisionTile({
@@ -227,13 +421,19 @@ class _DecisionTile extends StatelessWidget {
               child: Builder(
                 builder: (context) {
                   final optionId = option['id'] as String;
+                  final optionRevision =
+                      option['expectedRevision'] ?? option['expected_revision'];
+                  final optionExpectedRevision = optionRevision is num
+                      ? optionRevision.toInt()
+                      : expectedRevision;
                   return TextButton(
-                    onPressed: optionId == 'apply' && expectedRevision == null
+                    onPressed:
+                        optionId == 'apply' && optionExpectedRevision == null
                         ? null
                         : () => controller.resolveDecision(
                             decision,
                             optionId,
-                            expectedRevision: expectedRevision,
+                            expectedRevision: optionExpectedRevision,
                           ),
                     child: Text('${option['label'] ?? optionId}'),
                   );
@@ -342,6 +542,17 @@ class _MemoryProposalTile extends StatelessWidget {
     );
   }
 }
+
+String _recommendationStatusLabel(String status) => switch (status) {
+  'draft' => '草稿',
+  'generated' => '已生成，等待队长决定',
+  'displayed' => '已展示，等待队长决定',
+  'captain_selected' => '队长已选择',
+  'rejected' => '已拒绝',
+  'expired' => '已过期',
+  'added_to_trip' => '已加入行程',
+  _ => status,
+};
 
 String _statusLabel(String status) => switch (status) {
   'receiving_command' => '正在接收指令',

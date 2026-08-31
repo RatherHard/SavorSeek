@@ -5,7 +5,7 @@ import 'place_repository.dart';
 import 'place_search_query.dart';
 
 /// 查询结果的来源。
-enum PlaceSearchSource { keyword, viewport }
+enum PlaceSearchSource { keyword, viewport, agent }
 
 /// 探索页的检索状态。
 sealed class PlaceSearchState {
@@ -134,6 +134,8 @@ class PlaceSearchController extends ChangeNotifier {
   String? _lastViewportKey;
   PlaceSearchResult? _viewportResult;
   PlaceSearchResult? _keywordResult;
+  PlaceSearchResult? _agentResult;
+  String? _agentProjectionKey;
   String? _lastViewportKeywords;
   PlaceSearchQuery? _lastStructuredQuery;
   bool _isLoadingMore = false;
@@ -141,8 +143,10 @@ class PlaceSearchController extends ChangeNotifier {
   double? _lastViewportLongitude;
   int? _lastViewportRadius;
 
-  /// 当前应显示的结果。手动关键词结果优先，视野刷新不会静默替换它。
+  /// 当前应显示的结果。Agent 结果优先，关键词结果优先于视野结果。
   List<Place> get visiblePlaces {
+    final agentResult = _agentResult;
+    if (agentResult != null) return agentResult.places;
     final state = _state;
     if (state case PlaceSearchLoaded(:final places)
         when state.source == PlaceSearchSource.keyword) {
@@ -154,9 +158,42 @@ class PlaceSearchController extends ChangeNotifier {
     return _viewportResult?.places ?? const <Place>[];
   }
 
-  /// 当前地图应使用的候选。视野检索成功后优先使用最新视野批次，避免关键词结果
-  /// 在地图移动后继续作为过期 marker 来源；尚未有视野结果时回退到可见结果。
-  List<Place> get mapPlaces => _viewportResult?.places ?? visiblePlaces;
+  /// Agent 结果优先作为地图候选，随后才使用最新视野批次。
+  List<Place> get mapPlaces {
+    final agentResult = _agentResult;
+    return agentResult?.places ?? _viewportResult?.places ?? visiblePlaces;
+  }
+
+  /// 应用一批来自 Agent 的 canonical 地点结果。
+  ///
+  /// 相同 projection key 不重复通知，避免 Realtime 重放触发 marker 重建。
+  void applyAgentResult({
+    required String projectionKey,
+    required List<Place> places,
+  }) {
+    if (_isDisposed || projectionKey == _agentProjectionKey) return;
+    _agentProjectionKey = projectionKey;
+    _agentResult = PlaceSearchResult(
+      places: List.unmodifiable(places),
+      fromCache: false,
+      fetchedAt: places.isEmpty ? null : places.first.fetchedAt,
+    );
+    _selected = null;
+    notifyListeners();
+  }
+
+  void clearAgentResult() {
+    if (_agentResult == null && _agentProjectionKey == null) return;
+    _agentResult = null;
+    _agentProjectionKey = null;
+    if (_selected != null &&
+        !visiblePlaces.any((place) => place.id == _selected!.id)) {
+      _selected = null;
+    }
+    notifyListeners();
+  }
+
+  String? get agentProjectionKey => _agentProjectionKey;
 
   PlaceSearchState get state => _state;
 
@@ -340,6 +377,8 @@ class PlaceSearchController extends ChangeNotifier {
     _keywordResult = null;
     _viewportResult = null;
     _lastViewportKey = null;
+    _agentResult = null;
+    _agentProjectionKey = null;
     _lastStructuredQuery = query;
     _setState(
       PlaceSearchLoading(
@@ -453,6 +492,8 @@ class PlaceSearchController extends ChangeNotifier {
     _keywordResult = null;
     _viewportResult = null;
     _lastViewportKey = null;
+    _agentResult = null;
+    _agentProjectionKey = null;
     _lastStructuredQuery = null;
     _setState(PlaceSearchLoading(trimmed));
 

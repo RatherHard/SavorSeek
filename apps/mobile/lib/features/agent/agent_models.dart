@@ -49,15 +49,23 @@ class AgentTask {
 
 @immutable
 class AgentRecommendationSet {
-  const AgentRecommendationSet({required this.id, required this.items});
+  const AgentRecommendationSet({
+    required this.id,
+    required this.items,
+    this.status = 'generated',
+  });
 
   final String id;
   final List<Map<String, dynamic>> items;
+  final String status;
+
+  bool get canCaptainDecide => status == 'generated' || status == 'displayed';
 
   factory AgentRecommendationSet.fromJson(Map<String, dynamic> json) {
     final rawItems = json['items'];
     return AgentRecommendationSet(
       id: '${json['id']}',
+      status: '${json['status'] ?? 'generated'}',
       items: rawItems is List
           ? List.unmodifiable(
               rawItems.whereType<Map>().map(Map<String, dynamic>.from),
@@ -193,6 +201,58 @@ class AgentMemoryProposal {
 }
 
 @immutable
+class AgentTripDraft {
+  const AgentTripDraft({
+    required this.id,
+    required this.tripId,
+    required this.baseRevision,
+    required this.title,
+    required this.items,
+    required this.status,
+    this.warnings = const [],
+  });
+
+  final String id;
+  final String? tripId;
+  final int? baseRevision;
+  final String? title;
+  final List<Map<String, dynamic>> items;
+  final String status;
+  final List<String> warnings;
+
+  bool get canApply => status == 'proposed' || status == 'shown_to_captain';
+
+  List<String> get placeNames => items
+      .where((item) => item['itemType'] != 'break')
+      .map((item) => item['title'])
+      .whereType<String>()
+      .where((title) => title.trim().isNotEmpty)
+      .toList(growable: false);
+
+  factory AgentTripDraft.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    final rawWarnings = json['warnings'];
+    return AgentTripDraft(
+      id: '${json['id'] ?? ''}',
+      tripId: _stringOrNull(json['tripId'] ?? json['trip_id']),
+      baseRevision: _int(json['baseRevision'] ?? json['base_revision']),
+      title: _stringOrNull(
+        json['proposedTitle'] ?? json['proposed_title'] ?? json['title'],
+      ),
+      status: '${json['status'] ?? 'proposed'}',
+      items: rawItems is List
+          ? List.unmodifiable(
+              rawItems.whereType<Map>().map(Map<String, dynamic>.from),
+            )
+          : const [],
+      warnings: rawWarnings is List
+          ? List.unmodifiable(rawWarnings.whereType<String>())
+          : const [],
+    );
+  }
+}
+
+@immutable
 class AgentWorkspaceSnapshot {
   const AgentWorkspaceSnapshot({
     this.session,
@@ -208,7 +268,7 @@ class AgentWorkspaceSnapshot {
   final List<AgentTask> tasks;
   final List<AgentRecommendationSet> recommendations;
   final List<AgentEvent> events;
-  final Map<String, dynamic>? draft;
+  final AgentTripDraft? draft;
   final List<Map<String, dynamic>> decisions;
   final List<AgentMemoryProposal> memoryProposals;
 
@@ -240,7 +300,9 @@ class AgentWorkspaceSnapshot {
       memoryProposals: _maps(rawMemoryProposals)
           .map(AgentMemoryProposal.fromJson)
           .toList(growable: false),
-      draft: _maps(rawDrafts).isEmpty ? null : _maps(rawDrafts).last,
+      draft: _maps(rawDrafts).isEmpty
+          ? null
+          : AgentTripDraft.fromJson(_maps(rawDrafts).last),
     );
   }
 

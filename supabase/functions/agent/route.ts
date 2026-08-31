@@ -6,10 +6,11 @@
  * TripDraft 需要 is_time_locked 之外的字段由队长确认后经 apply_trip_draft
  * 写入正式行程。
  */
-import type { RecommendationItem, VerifiedPlace } from './types.ts';
+import type { ParsedIntent, RecommendationItem, VerifiedPlace } from './types.ts';
 
 export interface RouteStop {
   name: string;
+  providerPlaceId: string;
   placeId: string | null;
   localDate: string;
   plannedStartAt: string;
@@ -23,6 +24,29 @@ export interface RouteStop {
 export interface RouteResult {
   stops: RouteStop[];
   warnings: string[];
+}
+
+const MEAL_LABELS: Record<NonNullable<ParsedIntent['mealPeriod']>, string> = {
+  breakfast: '早餐',
+  lunch: '午餐',
+  afternoon_tea: '下午茶',
+  dinner: '晚餐',
+  late_night: '夜宵',
+};
+
+/** 根据已解析的结构化意图生成稳定、可落库的行程标题。 */
+export function routeTitle(
+  intent: ParsedIntent,
+  firstPlaceName?: string,
+): string {
+  const subject = intent.area ?? intent.city ?? intent.keywords ?? '';
+  const meal = intent.mealPeriod === null ? '' : MEAL_LABELS[intent.mealPeriod];
+  if (subject.length === 0 && firstPlaceName != null && firstPlaceName.length > 0) {
+    return `美食路线 · ${firstPlaceName}`.slice(0, 80);
+  }
+  if (subject.length === 0 && meal.length === 0) return '今日美食路线';
+  const suffix = meal || '美食路线';
+  return `${subject} · ${suffix}`.slice(0, 80);
 }
 
 /** 每站默认停留 90 分钟。 */
@@ -44,6 +68,7 @@ export function planRoute(
     startHour: number;
     startMinute?: number;
     maxStops?: number;
+    timezone?: string;
   },
 ): RouteResult {
   const warnings: string[] = [];
@@ -92,12 +117,23 @@ export function planRoute(
     const endMinutes = beginMinutes + STAY_MINUTES;
     const dayOffset = Math.floor(beginMinutes / 1440);
     const dayOffsetEnd = Math.floor(endMinutes / 1440);
-    const localStart = minutesToIso(options.startDate, beginMinutes % 1440, dayOffset);
-    const localEnd = minutesToIso(options.startDate, endMinutes % 1440, dayOffsetEnd);
+    const localStart = minutesToIso(
+      options.startDate,
+      beginMinutes % 1440,
+      dayOffset,
+      options.timezone,
+    );
+    const localEnd = minutesToIso(
+      options.startDate,
+      endMinutes % 1440,
+      dayOffsetEnd,
+      options.timezone,
+    );
     if (dayOffset > 0) warnings.push(`${ordered[index].name} 排到了次日，请确认`);
     const rankItem = recommendations.find((item) => item.name === ordered[index].name);
     stops.push({
       name: ordered[index].name,
+      providerPlaceId: ordered[index].provider_place_id,
       placeId: null,
       localDate: offsetDate(options.startDate, dayOffset),
       plannedStartAt: localStart,
@@ -132,7 +168,7 @@ export function toTripDraftItems(
     const rankItem = recommendations.find((item) => item.name === stop.name);
     return {
       itemType: stop.itemType,
-      placeId: placeIds.get(stop.name) ?? stop.placeId,
+      placeId: placeIds.get(stop.providerPlaceId) ?? stop.placeId,
       title: stop.name,
       localDate: stop.localDate,
       plannedStartAt: stop.plannedStartAt,
@@ -154,9 +190,39 @@ function offsetDate(startDate: string, dayOffset: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-function minutesToIso(startDate: string, minutes: number, dayOffset: number): string {
+function minutesToIso(
+  startDate: string,
+  minutes: number,
+  dayOffset: number,
+  timezone = 'UTC',
+): string {
   const date = new Date(`${offsetDate(startDate, dayOffset)}T00:00:00Z`);
   date.setUTCMinutes(minutes);
+  if (timezone === 'UTC') return date.toISOString().replace(/\.\d{3}Z$/, '+00:00');
+
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(
+    parts.filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)]),
+  );
+  const localAsUtc = Date.UTC(
+    values['year'],
+    values['month'] - 1,
+    values['day'],
+    values['hour'] % 24,
+    values['minute'],
+    values['second'],
+  );
+  const offsetMinutes = Math.round((localAsUtc - date.getTime()) / 60_000);
+  date.setUTCMinutes(date.getUTCMinutes() - offsetMinutes);
   return date.toISOString().replace(/\.\d{3}Z$/, '+00:00');
 }
 

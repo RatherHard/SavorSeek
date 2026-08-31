@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:savorseek/app/supabase/supabase_bootstrap.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 import 'package:savorseek/features/agent/agent_repository.dart';
+import 'package:savorseek/features/agent/route_trip_factory.dart';
 import 'package:savorseek/features/explore/amap_consent.dart';
 import 'package:savorseek/features/places/favorite_repository.dart';
 import 'package:savorseek/features/places/place_repository.dart';
@@ -28,6 +29,7 @@ class AppDependencies {
     this.mapConsent,
     this.routeService,
     this.agentRepository = const UnavailableAgentRepository(),
+    this.routeTripFactory,
     this.supabaseClient,
   });
 
@@ -62,6 +64,7 @@ class AppDependencies {
       mapConsent: consent,
       routeService: EdgeFunctionRouteService(auth: auth),
       agentRepository: SupabaseAgentRepository(auth: auth),
+      routeTripFactory: SupabaseRouteTripFactory(tripRepository),
       supabaseClient: Supabase.instance.client,
     );
   }
@@ -85,6 +88,7 @@ class AppDependencies {
   final TripRouteService? routeService;
 
   final AgentRepository agentRepository;
+  final RouteTripFactory? routeTripFactory;
   final SupabaseClient? supabaseClient;
 
   /// 初始化未成功时面向用户的原因；成功时为 null。

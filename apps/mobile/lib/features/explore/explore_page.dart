@@ -9,6 +9,7 @@ import 'package:savorseek/app/theme/design_tokens.dart';
 import 'package:savorseek/features/explore/agent_command_bar.dart';
 import 'package:savorseek/features/agent/agent_context.dart';
 import 'package:savorseek/features/agent/agent_controller.dart';
+import 'package:savorseek/features/agent/agent_place_projection.dart';
 import 'package:savorseek/features/agent/agent_workspace_panel.dart';
 import 'package:savorseek/features/explore/amap_consent.dart';
 import 'package:savorseek/features/explore/amap_surface.dart';
@@ -97,6 +98,7 @@ class _ExplorePageState extends State<ExplorePage> {
   CameraPosition? _lastCameraPosition;
   MapMarkerSelectionResult? _markerSelection;
   bool _isAddingToTrip = false;
+  String? _agentProjectionKey;
 
   @override
   void initState() {
@@ -119,7 +121,29 @@ class _ExplorePageState extends State<ExplorePage> {
 
   void _onFavoritesChanged() => setState(() {});
   void _onAgentChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final search = _search;
+    final agent = widget.agentController;
+    if (search != null && agent != null) {
+      final projection = projectAgentPlaces(agent.snapshot);
+      if (projection == null) {
+        if (_agentProjectionKey != null) {
+          search.clearAgentResult();
+          _agentProjectionKey = null;
+        }
+      } else if (projection.key != _agentProjectionKey) {
+        _agentProjectionKey = projection.key;
+        if (projection.places.isEmpty) {
+          search.clearAgentResult();
+        } else {
+          search.applyAgentResult(
+            projectionKey: projection.key,
+            places: projection.places,
+          );
+        }
+      }
+    }
+    setState(() {});
   }
 
   void _onCameraMoveEnd(CameraPosition position) {
@@ -207,15 +231,19 @@ class _ExplorePageState extends State<ExplorePage> {
               width: size.width,
               height: size.height,
             );
-      await agent.submit(
-        command,
-        context: AgentSubmitContext(
-          mapViewport: viewport == null
-              ? null
-              : AgentMapViewport.fromQuery(viewport),
-          selectedPlaceIds: [?_search?.selected?.id],
-        ),
+      final submitContext = AgentSubmitContext(
+        mapViewport: viewport == null
+            ? null
+            : AgentMapViewport.fromQuery(viewport),
+        selectedPlaceIds: [?_search?.selected?.id],
       );
+      _search?.clearAgentResult();
+      _agentProjectionKey = null;
+      if (_isRouteCommand(command)) {
+        await agent.submitRoute(command, context: submitContext);
+      } else {
+        await agent.submit(command, context: submitContext);
+      }
       return;
     }
     await _search?.searchByKeywords(command, city: _defaultCity);
@@ -275,6 +303,9 @@ class _ExplorePageState extends State<ExplorePage> {
         ?.showSnackBar(SnackBar(content: Text(message)));
   }
 
+  bool _isRouteCommand(String command) =>
+      RegExp(r'路线|安排.{0,6}(行程|路线)|规划|顺路|一路').hasMatch(command);
+
   @override
   Widget build(BuildContext context) {
     final search = _search;
@@ -298,13 +329,8 @@ class _ExplorePageState extends State<ExplorePage> {
                   if (search != null) ..._buildOverlays(search),
                   if (widget.agentController != null)
                     Positioned.fill(
-                      child: IgnorePointer(
-                        ignoring:
-                            !widget.agentController!.hasSession &&
-                            widget.agentController!.error == null,
-                        child: AgentWorkspacePanel(
-                          controller: widget.agentController!,
-                        ),
+                      child: AgentWorkspacePanel(
+                        controller: widget.agentController!,
                       ),
                     ),
                 ],
@@ -319,7 +345,8 @@ class _ExplorePageState extends State<ExplorePage> {
           onSubmit:
               search == null ||
                   search.isLoading ||
-                  widget.agentController?.isSubmitting == true
+                  widget.agentController?.isSubmitting == true ||
+                  widget.agentController?.isCreatingRouteTrip == true
               ? null
               : _submitCommand,
         ),
@@ -372,33 +399,36 @@ class _ExplorePageState extends State<ExplorePage> {
       if (widget.favoriteController != null &&
           (foodPlaces.isNotEmpty || _hasPartialResult(search)))
         Positioned.fill(
-          child: PlaceResultsDrawer(
-            places: foodPlaces,
-            favorites: widget.favoriteController!,
-            selectedPlaceId: selected?.id,
-            onSelect: _selectPlaceFromList,
-            onToggleFavorite: (placeId) =>
-                widget.favoriteController!.toggle(placeId),
-            onRetryFavorite: (placeId) =>
-                widget.favoriteController!.retry(placeId),
-            hasMore: search.hasMore,
-            isLoadingMore: search.isLoadingMore,
-            paginationError: search.state is PlaceSearchLoaded
-                ? (search.state as PlaceSearchLoaded).loadMoreError
-                : null,
-            onLoadMore: search.hasMore ? search.loadMore : null,
-            onRetryPagination:
-                search.state is PlaceSearchLoaded &&
-                    (search.state as PlaceSearchLoaded).loadMoreError != null
-                ? search.loadMore
-                : null,
-            isPartial: _hasPartialResult(search),
-            onRetryPartial: _hasPartialResult(search) ? search.retry : null,
-            onUnauthenticatedFavorite: widget.auth?.isSignedIn == false
-                ? (_) async {
-                    await showAuthSheet(context, auth: widget.auth!);
-                  }
-                : null,
+          child: Offstage(
+            offstage: selected != null,
+            child: PlaceResultsDrawer(
+              places: foodPlaces,
+              favorites: widget.favoriteController!,
+              selectedPlaceId: selected?.id,
+              onSelect: _selectPlaceFromList,
+              onToggleFavorite: (placeId) =>
+                  widget.favoriteController!.toggle(placeId),
+              onRetryFavorite: (placeId) =>
+                  widget.favoriteController!.retry(placeId),
+              hasMore: search.hasMore,
+              isLoadingMore: search.isLoadingMore,
+              paginationError: search.state is PlaceSearchLoaded
+                  ? (search.state as PlaceSearchLoaded).loadMoreError
+                  : null,
+              onLoadMore: search.hasMore ? search.loadMore : null,
+              onRetryPagination:
+                  search.state is PlaceSearchLoaded &&
+                      (search.state as PlaceSearchLoaded).loadMoreError != null
+                  ? search.loadMore
+                  : null,
+              isPartial: _hasPartialResult(search),
+              onRetryPartial: _hasPartialResult(search) ? search.retry : null,
+              onUnauthenticatedFavorite: widget.auth?.isSignedIn == false
+                  ? (_) async {
+                      await showAuthSheet(context, auth: widget.auth!);
+                    }
+                  : null,
+            ),
           ),
         ),
       if (selected != null)

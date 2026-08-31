@@ -87,9 +87,56 @@ void main() {
 
   tearDown(() => controller.dispose());
 
-  test('初始状态为 idle', () {
-    expect(controller.state, isA<PlaceSearchIdle>());
-    expect(controller.selected, isNull);
+  test('Agent 结果优先于关键词和视野结果', () async {
+    repository.result = PlaceSearchResult(
+      places: [buildPlace(id: 'keyword')],
+      fromCache: false,
+    );
+    await controller.searchByKeywords('烧烤');
+    await controller.searchAround(
+      latitude: 38.914,
+      longitude: 121.615,
+      radiusMeters: 3000,
+      queryKey: 'viewport-1',
+    );
+
+    final agentPlace = buildPlace(id: 'agent', name: 'Agent 推荐店');
+    controller.applyAgentResult(
+      projectionKey: 'session:1:set',
+      places: [agentPlace],
+    );
+
+    expect(controller.visiblePlaces.single.id, 'agent');
+    expect(controller.mapPlaces.single.id, 'agent');
+  });
+
+  test('相同 Agent projection 不重复通知', () {
+    var notifications = 0;
+    controller.addListener(() => notifications++);
+    final place = buildPlace(id: 'agent');
+
+    controller.applyAgentResult(projectionKey: 'same', places: [place]);
+    final afterFirst = notifications;
+    controller.applyAgentResult(projectionKey: 'same', places: [place]);
+
+    expect(afterFirst, 1);
+    expect(notifications, afterFirst);
+  });
+
+  test('新的关键词搜索会清除 Agent 结果', () async {
+    controller.applyAgentResult(
+      projectionKey: 'session:1:set',
+      places: [buildPlace(id: 'agent')],
+    );
+    repository.result = PlaceSearchResult(
+      places: [buildPlace(id: 'keyword')],
+      fromCache: false,
+    );
+
+    await controller.searchByKeywords('烧烤');
+
+    expect(controller.visiblePlaces.single.id, 'keyword');
+    expect(controller.agentProjectionKey, isNull);
   });
 
   test('视野检索进入 viewport 状态并传递周边参数', () async {

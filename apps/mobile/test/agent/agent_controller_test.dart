@@ -5,7 +5,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:savorseek/features/agent/agent_controller.dart';
 import 'package:savorseek/features/agent/agent_models.dart';
 import 'package:savorseek/features/agent/agent_repository.dart';
+import 'package:savorseek/features/agent/route_trip_factory.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
+import 'package:savorseek/features/trip/trip_repository.dart';
 
 class _FakeAuth implements AuthService {
   _FakeAuth();
@@ -49,6 +51,18 @@ class _FakeAuth implements AuthService {
   }
 }
 
+class _FakeRouteTripFactory implements RouteTripFactory {
+  int calls = 0;
+
+  @override
+  Future<TripWriteResult> createRouteTrip({
+    required String idempotencyKey,
+  }) async {
+    calls++;
+    return const TripWriteResult(id: 'trip-route-1', revision: 1);
+  }
+}
+
 class _FakeAgentRepository implements AgentRepository {
   final List<String> calls = [];
   final List<int> eventCursors = [];
@@ -57,6 +71,8 @@ class _FakeAgentRepository implements AgentRepository {
   AgentRepositoryException? submitError;
   Completer<AgentWorkspaceSnapshot>? submitGate;
   String? submittedRequestId;
+  String? submittedTaskType;
+  Map<String, dynamic>? submittedContext;
   final List<AgentMemoryProposal> memoryProposals = [];
   String? memoryProposalId;
   String? memoryDecision;
@@ -73,6 +89,8 @@ class _FakeAgentRepository implements AgentRepository {
     Map<String, dynamic> constraints = const {},
   }) async {
     submittedRequestId = clientRequestId;
+    submittedTaskType = taskType;
+    submittedContext = context;
     calls.add('submit');
     await submitGate?.future;
     final error = submitError;
@@ -168,12 +186,18 @@ AgentWorkspaceSnapshot snapshot(String id, int sequence) =>
 void main() {
   late _FakeAuth auth;
   late _FakeAgentRepository repository;
+  late _FakeRouteTripFactory routeFactory;
   late AgentController controller;
 
   setUp(() {
     auth = _FakeAuth()..userId = 'user-a';
     repository = _FakeAgentRepository();
-    controller = AgentController(repository: repository, auth: auth);
+    routeFactory = _FakeRouteTripFactory();
+    controller = AgentController(
+      repository: repository,
+      auth: auth,
+      routeTripFactory: routeFactory,
+    );
   });
 
   tearDown(() async {
@@ -181,6 +205,19 @@ void main() {
     await auth.changes.close();
   });
 
+  test('route submission creates a trip and forwards its revision', () async {
+    repository.snapshots.add(snapshot('session-1', 1));
+
+    await controller.submitRoute('规划一条晚餐路线');
+
+    expect(routeFactory.calls, 1);
+    expect(repository.submittedTaskType, 'plan_route');
+    expect(repository.submittedContext, {
+      'selectedPlaceIds': <String>[],
+      'tripId': 'trip-route-1',
+      'tripRevision': 1,
+    });
+  });
   test(
     'submit activates the returned session and recovers event batches',
     () async {
@@ -212,6 +249,21 @@ void main() {
       expect(controller.snapshot.events.single.sequence, 2);
     },
   );
+
+  test('does not operate on a finalized recommendation set', () async {
+    final set = const AgentRecommendationSet(
+      id: 'set-finalized',
+      items: [
+        {'name': '甲店'},
+      ],
+      status: 'captain_selected',
+    );
+
+    await controller.selectRecommendation(set);
+    await controller.rejectRecommendation(set);
+
+    expect(repository.calls, isEmpty);
+  });
 
   test('logout clears private state and ignores the old session', () async {
     repository.snapshots.add(snapshot('session-1', 1));

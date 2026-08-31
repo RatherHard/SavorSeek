@@ -43,6 +43,7 @@ void main() {
         'recommendations': [
           {
             'id': 'set-1',
+            'status': 'displayed',
             'items': [
               {'name': '甲店', 'rank': 1},
             ],
@@ -79,6 +80,8 @@ void main() {
       expect(snapshot.session?.status, 'working');
       expect(snapshot.tasks.single.progress, 40);
       expect(snapshot.recommendations.single.items.single['name'], '甲店');
+      expect(snapshot.recommendations.single.status, 'displayed');
+      expect(snapshot.recommendations.single.canCaptainDecide, isTrue);
       expect(snapshot.events.single.type, 'task.started');
       expect(snapshot.awaitingDecision, isTrue);
       expect(snapshot.memoryProposals.single.memoryKey, 'avoid');
@@ -91,6 +94,75 @@ void main() {
       );
     },
   );
+
+  test(
+    'defaults recommendation status to generated for legacy projections',
+    () {
+      final snapshot = AgentWorkspaceSnapshot.fromJson({
+        'recommendations': [
+          {
+            'id': 'set-legacy',
+            'items': [
+              {'name': '旧店'},
+            ],
+          },
+        ],
+      });
+
+      expect(snapshot.recommendations.single.status, 'generated');
+      expect(snapshot.recommendations.single.canCaptainDecide, isTrue);
+    },
+  );
+
+  test(
+    'only generated and displayed recommendations accept captain actions',
+    () {
+      for (final status in [
+        'generated',
+        'displayed',
+        'draft',
+        'captain_selected',
+        'rejected',
+        'expired',
+        'added_to_trip',
+        'unknown',
+      ]) {
+        final set = AgentRecommendationSet(
+          id: 'set-$status',
+          items: const [],
+          status: status,
+        );
+
+        expect(
+          set.canCaptainDecide,
+          status == 'generated' || status == 'displayed',
+        );
+      }
+    },
+  );
+
+  test('decodes route draft title, place names, and revision', () {
+    final draft = AgentTripDraft.fromJson({
+      'id': 'draft-1',
+      'trip_id': 'trip-1',
+      'base_revision': 2,
+      'proposed_title': '大连 · 晚餐',
+      'status': 'proposed',
+      'items': [
+        {'itemType': 'place_visit', 'title': '海鲜面馆'},
+        {'itemType': 'place_visit', 'title': '烧烤店'},
+      ],
+      'warnings': ['请确认营业时间'],
+    });
+
+    expect(draft.id, 'draft-1');
+    expect(draft.tripId, 'trip-1');
+    expect(draft.baseRevision, 2);
+    expect(draft.title, '大连 · 晚餐');
+    expect(draft.placeNames, ['海鲜面馆', '烧烤店']);
+    expect(draft.warnings, ['请确认营业时间']);
+    expect(draft.canApply, isTrue);
+  });
 
   test('Given no projection arrays, When it is decoded, Then empty collections are returned', () {
     final snapshot = AgentWorkspaceSnapshot.fromJson(const {});

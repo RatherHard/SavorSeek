@@ -9,10 +9,16 @@ import 'package:savorseek/features/agent/agent_context.dart';
 import 'package:savorseek/features/agent/agent_models.dart';
 import 'package:savorseek/features/agent/agent_event_reducer.dart';
 import 'package:savorseek/features/agent/agent_repository.dart';
+import 'package:savorseek/features/agent/route_trip_factory.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 
 class AgentController extends ChangeNotifier {
-  AgentController({required this.repository, required this.auth, this.client}) {
+  AgentController({
+    required this.repository,
+    required this.auth,
+    this.client,
+    this.routeTripFactory,
+  }) {
     _currentUserId = auth.currentUserId;
     _authSubscription = auth.userIdChanges.listen(_onUserChanged);
   }
@@ -20,6 +26,7 @@ class AgentController extends ChangeNotifier {
   final AgentRepository repository;
   final AuthService auth;
   final SupabaseClient? client;
+  final RouteTripFactory? routeTripFactory;
   AgentWorkspaceSnapshot _snapshot = const AgentWorkspaceSnapshot();
   RealtimeChannel? _channel;
   StreamSubscription<String?>? _authSubscription;
@@ -33,6 +40,7 @@ class AgentController extends ChangeNotifier {
   String? _currentUserId;
   String? _sessionId;
   bool _isSubmitting = false;
+  bool _isCreatingRouteTrip = false;
   String? _error;
   String? _lastFailedSubmission;
   int _lifecycleGeneration = 0;
@@ -42,6 +50,7 @@ class AgentController extends ChangeNotifier {
 
   AgentWorkspaceSnapshot get snapshot => _snapshot;
   bool get isSubmitting => _isSubmitting;
+  bool get isCreatingRouteTrip => _isCreatingRouteTrip;
   String? get error => _error;
   bool get hasSession => _sessionId != null;
   bool get canRetrySubmit => _lastFailedSubmission != null && !_isSubmitting;
@@ -56,7 +65,12 @@ class AgentController extends ChangeNotifier {
     String taskType = 'discover_places',
   }) async {
     final trimmed = text.trim();
-    if (_isSubmitting || trimmed.isEmpty || !auth.isSignedIn) return;
+    if (_isSubmitting ||
+        _isCreatingRouteTrip ||
+        trimmed.isEmpty ||
+        !auth.isSignedIn) {
+      return;
+    }
     final stableContext = AgentSubmitContext(
       mapViewport: context.mapViewport,
       selectedPlaceIds: List.unmodifiable(context.selectedPlaceIds),
@@ -87,6 +101,80 @@ class AgentController extends ChangeNotifier {
       taskType: taskType,
       signature: signature,
     );
+  }
+
+  Future<void> submitRoute(
+    String text, {
+    AgentSubmitContext context = const AgentSubmitContext(),
+    Map<String, dynamic> constraints = const {},
+  }) async {
+    final factory = routeTripFactory;
+    if (factory == null) {
+      _error = '路线规划服务尚未配置。';
+      notifyListeners();
+      return;
+    }
+    if (_isSubmitting ||
+        _isCreatingRouteTrip ||
+        text.trim().isEmpty ||
+        !auth.isSignedIn) {
+      return;
+    }
+    final generation = _lifecycleGeneration;
+    final userId = _currentUserId;
+    final requestId = _newRequestId();
+    _isCreatingRouteTrip = true;
+    _error = null;
+    notifyListeners();
+    try {
+      final trip = await factory.createRouteTrip(idempotencyKey: requestId);
+      if (_isDisposed ||
+          generation != _lifecycleGeneration ||
+          userId != _currentUserId ||
+          !auth.isSignedIn) {
+        return;
+      }
+      final stableContext = AgentSubmitContext(
+        mapViewport: context.mapViewport,
+        selectedPlaceIds: List.unmodifiable(context.selectedPlaceIds),
+        tripId: trip.id,
+        tripRevision: trip.revision,
+      );
+      final stableConstraints = _copyMap(constraints);
+      final submitSignature = jsonEncode([
+        text.trim(),
+        'plan_route',
+        stableContext.toJson(),
+        stableConstraints,
+      ]);
+      _pendingSubmissions[submitSignature] = _PendingSubmission(
+        text: text.trim(),
+        requestId: requestId,
+        context: stableContext,
+        constraints: stableConstraints,
+        taskType: 'plan_route',
+      );
+      _lastFailedSubmission = null;
+      await _submitWithRequest(
+        text.trim(),
+        requestId: requestId,
+        context: stableContext,
+        constraints: stableConstraints,
+        taskType: 'plan_route',
+        signature: submitSignature,
+      );
+    } on AgentRepositoryException catch (error) {
+      _error = error.message;
+      notifyListeners();
+    } on Exception catch (error) {
+      _error = error.toString();
+      notifyListeners();
+    } finally {
+      if (!_isDisposed && generation == _lifecycleGeneration) {
+        _isCreatingRouteTrip = false;
+        notifyListeners();
+      }
+    }
   }
 
   Future<void> retrySubmit() async {
@@ -242,31 +330,37 @@ class AgentController extends ChangeNotifier {
     await refresh();
   });
 
-  Future<void> selectRecommendation(AgentRecommendationSet set) =>
-      _runOperation('select:${set.id}', () async {
-        final sessionId = _sessionId;
-        if (sessionId == null || set.items.isEmpty) return;
-        await repository.selectRecommendation(
-          sessionId: sessionId,
-          recommendationSetId: set.id,
-          placeNames: [
-            for (final item in set.items)
-              if (item['name'] is String) item['name'] as String,
-          ],
-        );
-        await refresh();
-      });
+  Future<void> selectRecommendation(AgentRecommendationSet set) {
+    if (!set.canCaptainDecide) return Future<void>.value();
+    final sessionId = _sessionId;
+    if (sessionId == null || set.items.isEmpty) return Future<void>.value();
+    return _runOperation('recommendation:${set.id}', () async {
+      if (_sessionId != sessionId) return;
+      await repository.selectRecommendation(
+        sessionId: sessionId,
+        recommendationSetId: set.id,
+        placeNames: [
+          for (final item in set.items)
+            if (item['name'] is String) item['name'] as String,
+        ],
+      );
+      if (_sessionId == sessionId) await refresh();
+    });
+  }
 
-  Future<void> rejectRecommendation(AgentRecommendationSet set) =>
-      _runOperation('reject:${set.id}', () async {
-        final sessionId = _sessionId;
-        if (sessionId == null) return;
-        await repository.rejectRecommendation(
-          sessionId: sessionId,
-          recommendationSetId: set.id,
-        );
-        await refresh();
-      });
+  Future<void> rejectRecommendation(AgentRecommendationSet set) {
+    if (!set.canCaptainDecide) return Future<void>.value();
+    final sessionId = _sessionId;
+    if (sessionId == null) return Future<void>.value();
+    return _runOperation('recommendation:${set.id}', () async {
+      if (_sessionId != sessionId) return;
+      await repository.rejectRecommendation(
+        sessionId: sessionId,
+        recommendationSetId: set.id,
+      );
+      if (_sessionId == sessionId) await refresh();
+    });
+  }
 
   Future<void> retryTask(AgentTask task) =>
       _runOperation('retry:${task.id}', () async {
@@ -439,7 +533,11 @@ class AgentController extends ChangeNotifier {
           },
         )
         .subscribe((status, [error]) {
-          if (_isDisposed || generation != _lifecycleGeneration || _sessionId != sessionId) return;
+          if (_isDisposed ||
+              generation != _lifecycleGeneration ||
+              _sessionId != sessionId) {
+            return;
+          }
           if (status == RealtimeSubscribeStatus.subscribed) {
             _error = null;
             notifyListeners();

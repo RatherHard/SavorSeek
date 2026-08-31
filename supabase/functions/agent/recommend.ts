@@ -92,6 +92,7 @@ export function rankPlaces(
 
     return {
       placeId: null,
+      providerPlaceId: place.provider_place_id,
       name: place.name,
       rank: 0,
       score: Number(score.toFixed(2)),
