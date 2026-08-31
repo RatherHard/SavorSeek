@@ -19,6 +19,7 @@ class AmapSurface extends StatefulWidget {
     this.polylines = const <Polyline>{},
     this.onMapTap,
     this.onCameraMoveEnd,
+    this.onLocationChanged,
     this.initialCameraPosition,
     this.gesturesEnabled = true,
     this.eagerGestures = true,
@@ -37,6 +38,9 @@ class AmapSurface extends StatefulWidget {
 
   /// 相机停止移动时转发当前相机位置。
   final void Function(CameraPosition position)? onCameraMoveEnd;
+
+  /// 转发高德 SDK 提供的当前位置（坐标已与高德地图保持一致）。
+  final void Function(AMapLocation location)? onLocationChanged;
 
   /// 初始视野。为空时用 [initialCamera]。
   final CameraPosition? initialCameraPosition;
@@ -104,6 +108,7 @@ class _AmapSurfaceState extends State<AmapSurface> {
       polylines: widget.polylines,
       onTap: widget.onMapTap,
       onCameraMoveEnd: widget.onCameraMoveEnd,
+      onLocationChanged: widget.onLocationChanged,
       // 全屏地图需要单指拖拽与双指缩放；嵌入式小地图关闭手势，避免与页面滚动
       // 争夺同一个纵向拖拽。
       scrollGesturesEnabled: widget.gesturesEnabled,
