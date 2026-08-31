@@ -30,7 +30,8 @@
 	     刻意按域声明而非 NSAllowsArbitraryLoads，避免放开全部明文请求。
 	     这是开发期妥协——凭据明文传输可被中间人截获；服务端配好 HTTPS 后
 	     必须整段移除。地址变更时同步更新此处与 supabase.env。 -->
-	<key>NSAppTransportSecurity</key>
+		<key>NSLocationWhenInUseUsageDescription</key>
+		<string>仅用于获取当前位置，为你推荐附近的美食。</string>
 	<dict>
 		<key>NSExceptionDomains</key>
 		<dict>

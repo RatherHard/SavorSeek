@@ -7,6 +7,7 @@ import 'package:savorseek/features/agent/agent_repository.dart';
 import 'package:savorseek/features/agent/route_trip_factory.dart';
 import 'package:savorseek/features/explore/amap_consent.dart';
 import 'package:savorseek/features/places/favorite_repository.dart';
+import 'package:savorseek/features/location/location_service.dart';
 import 'package:savorseek/features/places/place_repository.dart';
 import 'package:savorseek/features/trip/add_place_to_trip.dart';
 import 'package:savorseek/features/trip/trip_repository.dart';
@@ -31,6 +32,7 @@ class AppDependencies {
     this.agentRepository = const UnavailableAgentRepository(),
     this.routeTripFactory,
     this.supabaseClient,
+    this.locationService = const UnavailableLocationService(),
   });
 
   /// 由已完成的 Supabase 初始化结果组装真实依赖。
@@ -51,10 +53,12 @@ class AppDependencies {
         mapConsent: consent,
         agentRepository: UnavailableAgentRepository(result.message),
         supabaseClient: null,
+        locationService: UnavailableLocationService(result.message),
       );
     }
     final auth = SupabaseAuthService();
     final tripRepository = SupabaseTripRepository(auth: auth);
+    final locationService = AmapLocationService();
     return AppDependencies(
       auth: auth,
       tripRepository: tripRepository,
@@ -66,6 +70,7 @@ class AppDependencies {
       agentRepository: SupabaseAgentRepository(auth: auth),
       routeTripFactory: SupabaseRouteTripFactory(tripRepository),
       supabaseClient: Supabase.instance.client,
+      locationService: locationService,
     );
   }
 
@@ -90,6 +95,7 @@ class AppDependencies {
   final AgentRepository agentRepository;
   final RouteTripFactory? routeTripFactory;
   final SupabaseClient? supabaseClient;
+  final LocationService locationService;
 
   /// 初始化未成功时面向用户的原因；成功时为 null。
   final String? bootstrapMessage;

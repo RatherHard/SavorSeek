@@ -6,6 +6,7 @@ import 'package:savorseek/app/theme/app_theme.dart';
 import 'package:savorseek/features/auth/auth_service.dart';
 import 'package:savorseek/features/places/favorite_repository.dart';
 import 'package:savorseek/features/trip/trip_repository_fakes.dart';
+import 'package:savorseek/features/location/location_service.dart';
 
 /// 应用根组件。
 class SavorSeekApp extends StatelessWidget {
@@ -18,6 +19,7 @@ class SavorSeekApp extends StatelessWidget {
     auth: UnavailableAuthService(),
     tripRepository: UnavailableTripRepository(),
     favoriteRepository: UnavailableFavoriteRepository(),
+    locationService: UnavailableLocationService(),
   );
 
   @override

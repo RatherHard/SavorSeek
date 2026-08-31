@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:savorseek/app/util/uuid.dart';
 import 'package:savorseek/features/agent/agent_context.dart';
+import 'package:savorseek/features/location/location_service.dart';
 import 'package:savorseek/features/agent/agent_models.dart';
 import 'package:savorseek/features/agent/agent_event_reducer.dart';
 import 'package:savorseek/features/agent/agent_repository.dart';
@@ -58,6 +59,20 @@ class AgentController extends ChangeNotifier {
   bool isMemoryProposalInFlight(String proposalId) => _inFlightOperations.any(
     (operation) => operation.startsWith('memory:$proposalId:'),
   );
+  Future<void> submitNearbyFoodRecommendations({
+    required DeviceLocation location,
+    AgentSubmitContext context = const AgentSubmitContext(),
+  }) => submit(
+    '推荐附近的美食',
+    context: AgentSubmitContext(
+      mapViewport: context.mapViewport,
+      currentLocation: location,
+      selectedPlaceIds: context.selectedPlaceIds,
+      tripId: context.tripId,
+      tripRevision: context.tripRevision,
+    ),
+    constraints: const {'keywords': '美食', 'resultLimit': 5},
+  );
   Future<void> submit(
     String text, {
     AgentSubmitContext context = const AgentSubmitContext(),
@@ -73,6 +88,7 @@ class AgentController extends ChangeNotifier {
     }
     final stableContext = AgentSubmitContext(
       mapViewport: context.mapViewport,
+      currentLocation: context.currentLocation,
       selectedPlaceIds: List.unmodifiable(context.selectedPlaceIds),
       tripId: context.tripId,
       tripRevision: context.tripRevision,
@@ -136,6 +152,7 @@ class AgentController extends ChangeNotifier {
       }
       final stableContext = AgentSubmitContext(
         mapViewport: context.mapViewport,
+        currentLocation: context.currentLocation,
         selectedPlaceIds: List.unmodifiable(context.selectedPlaceIds),
         tripId: trip.id,
         tripRevision: trip.revision,
