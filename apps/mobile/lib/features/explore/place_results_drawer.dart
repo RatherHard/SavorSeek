@@ -78,7 +78,7 @@ class _PlaceResultsDrawerState extends State<PlaceResultsDrawer> {
             switchInCurve: Curves.easeOut,
             switchOutCurve: Curves.easeIn,
             child: _isExpanded
-                ? _buildBottomSheet(context)
+                ? _buildBottomSheet(context, constraints)
                 : _buildCollapsed(context),
           ),
           PlaceResultsLayout.floating => _buildFloatingPanel(
@@ -132,14 +132,26 @@ class _PlaceResultsDrawerState extends State<PlaceResultsDrawer> {
     );
   }
 
-  Widget _buildBottomSheet(BuildContext context) {
+  Widget _buildBottomSheet(BuildContext context, BoxConstraints constraints) {
+    final availableHeight = constraints.hasBoundedHeight
+        ? constraints.maxHeight
+        : 600.0;
+    final minChildSize = (96 / availableHeight).clamp(0.12, 0.72).toDouble();
+    final initialChildSize = minChildSize;
+    final maxChildSize = math.max(minChildSize, 0.72);
+    final snapSizes = <double>{
+      minChildSize,
+      0.42.clamp(minChildSize, maxChildSize).toDouble(),
+      maxChildSize,
+    }.toList()..sort();
+
     return DraggableScrollableSheet(
       key: const ValueKey('expanded-place-results'),
-      initialChildSize: 0.12,
-      minChildSize: 0.12,
-      maxChildSize: 0.72,
+      initialChildSize: initialChildSize,
+      minChildSize: minChildSize,
+      maxChildSize: maxChildSize,
       snap: true,
-      snapSizes: const [0.12, 0.42, 0.72],
+      snapSizes: snapSizes,
       builder: (context, scrollController) => Material(
         elevation: 10,
         color: Theme.of(context).colorScheme.surface,
@@ -354,9 +366,13 @@ class _PlaceResultsDrawerState extends State<PlaceResultsDrawer> {
                   ),
                 if (widget.hasMore)
                   widget.isLoadingMore
-                      ? const Padding(
-                          padding: EdgeInsets.all(AppTokens.spaceMd),
-                          child: CircularProgressIndicator(),
+                      ? Semantics(
+                          label: '正在加载更多地点',
+                          liveRegion: true,
+                          child: const Padding(
+                            padding: EdgeInsets.all(AppTokens.spaceMd),
+                            child: CircularProgressIndicator(),
+                          ),
                         )
                       : OutlinedButton.icon(
                           onPressed: widget.onLoadMore,
