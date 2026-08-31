@@ -32,6 +32,7 @@
 	     必须整段移除。地址变更时同步更新此处与 supabase.env。 -->
 		<key>NSLocationWhenInUseUsageDescription</key>
 		<string>仅用于获取当前位置，为你推荐附近的美食。</string>
+		<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSExceptionDomains</key>
 		<dict>
