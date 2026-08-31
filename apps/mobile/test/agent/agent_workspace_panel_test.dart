@@ -97,6 +97,53 @@ class _Repository implements AgentRepository {
 }
 
 void main() {
+  testWidgets('shows route draft places and enables applying it', (
+    tester,
+  ) async {
+    final auth = _Auth();
+    final repository = _Repository(
+      AgentWorkspaceSnapshot(
+        session: const AgentSession(
+          id: 'session-1',
+          title: '探索',
+          status: 'awaiting_captain_decision',
+          projectionVersion: 1,
+        ),
+        draft: const AgentTripDraft(
+          id: 'draft-1',
+          tripId: 'trip-1',
+          baseRevision: 1,
+          title: '大连 · 晚餐',
+          status: 'proposed',
+          items: [
+            {'itemType': 'place_visit', 'title': '海鲜面馆'},
+            {'itemType': 'place_visit', 'title': '烧烤店'},
+          ],
+        ),
+      ),
+    );
+    final controller = AgentController(repository: repository, auth: auth);
+
+    await controller.submit('规划晚餐路线');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AgentWorkspacePanel(controller: controller)),
+      ),
+    );
+
+    expect(find.text('大连 · 晚餐'), findsOneWidget);
+    expect(find.textContaining('海鲜面馆、烧烤店'), findsOneWidget);
+    expect(find.text('应用草案'), findsOneWidget);
+    expect(
+      tester
+          .widget<TextButton>(find.widgetWithText(TextButton, '应用草案'))
+          .onPressed,
+      isNotNull,
+    );
+
+    controller.dispose();
+    await auth.dispose();
+  });
   testWidgets('shows recommendation status and enables captain actions', (
     tester,
   ) async {

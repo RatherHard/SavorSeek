@@ -14,7 +14,7 @@ import { verifyCandidates } from './fact.ts';
 import { parseCommandIntent } from './intent.ts';
 import { readMemorySignals } from './memory.ts';
 import { rankPlaces } from './recommend.ts';
-import { planRoute, toTripDraftItems } from './route.ts';
+import { planRoute, routeTitle, toTripDraftItems } from './route.ts';
 import { searchAmapPlaces, requireAmapKey, type AmapQuery } from '../places-search/amap.ts';
 import { resolveRoute, type GeoPoint, type TravelMode } from '../trip-route/amap.ts';
 import {
@@ -262,11 +262,13 @@ async function runOrchestrationInternal(
         return { summary: route.warnings.join('；'), complete: false };
       }
       const tripContextTripId = (ctx.context['tripId'] as string | undefined) ?? null;
+      const draftTitle = routeTitle(ctx.intent!, route.stops[0]?.name);
       if (!tripContextTripId) {
         // 无关联行程：路线阶段降级为仅展示顺序（不写草案）。
         ctx.degraded.push('未关联行程，路线草案未落库');
         await appendEvent(deps, ctx.sessionId, ctx.commandId, null, 'trip.draft.created', {
           stops: route.stops.length,
+          title: draftTitle,
           warnings: route.warnings,
           persisted: false,
         });
@@ -310,10 +312,9 @@ async function runOrchestrationInternal(
         trip_id: tripContextTripId,
         session_id: ctx.sessionId,
         source_task_id: phaseTaskId,
-        base_revision: typeof ctx.context['tripRevision'] === 'number'
-          ? Math.trunc(ctx.context['tripRevision'] as number)
-          : Number(tripRow['revision'] ?? 1),
+        base_revision: Number(tripRow['revision'] ?? 1),
         status: 'proposed',
+        proposed_title: draftTitle,
         items: toTripDraftItems(plannedRoute.stops, ctx.recommendations, new Map(
           [...placeIds].map(([providerId, row]) => [providerId, String(row['id'])]),
         )),
@@ -333,7 +334,7 @@ async function runOrchestrationInternal(
           kind: 'apply_trip_draft',
           question: '路线草案需要更新当前行程，是否应用？',
           options: [
-            { id: 'apply', label: '应用草案', impact: '更新当前行程版本' },
+            { id: 'apply', label: '应用草案', impact: '更新当前行程版本', expectedRevision: Number(tripRow['revision'] ?? 1) },
             { id: 'keep_locked', label: '保留现有安排', impact: '仅查看冲突' },
             { id: 'cancel', label: '取消本次调整', impact: '不修改行程' },
           ],
@@ -346,6 +347,7 @@ async function runOrchestrationInternal(
       ctx.pendingDecision = true;
       await appendEvent(deps, ctx.sessionId, ctx.commandId, null, 'trip.draft.created', {
         draftId: ctx.tripDraftId,
+        title: draftTitle,
         stops: plannedRoute.stops.length,
         warnings: plannedRoute.warnings,
       });
@@ -353,7 +355,7 @@ async function runOrchestrationInternal(
         checkpointId: (checkpoint as Record<string, unknown>)['id'],
         draftId: ctx.tripDraftId,
       });
-      return { summary: `已生成 ${plannedRoute.stops.length} 站路线草案，等待队长确认`, complete: true, artifact: { type: 'trip_draft', payload: { draftId: ctx.tripDraftId, stops: plannedRoute.stops } } };
+      return { summary: `已生成 ${plannedRoute.stops.length} 站路线草案，等待队长确认`, complete: true, artifact: { type: 'trip_draft', payload: { draftId: ctx.tripDraftId, title: draftTitle, stops: plannedRoute.stops } } };
     }, PHASE_TIMEOUT_MS.route);
     if (await checkCancelled(deps, sessionId)) return;
   }

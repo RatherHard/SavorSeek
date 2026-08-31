@@ -42,11 +42,13 @@ class _AgentWorkspacePanelState extends State<AgentWorkspacePanel> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final availableWidth = constraints.hasBoundedWidth
-            ? (constraints.maxWidth - 24).clamp(48.0, double.infinity)
+            ? (constraints.maxWidth - 24)
+                  .clamp(48.0, double.infinity)
+                  .toDouble()
             : 360.0;
-        final expandedWidth = availableWidth.clamp(48.0, 360.0);
+        final expandedWidth = availableWidth.clamp(48.0, 360.0).toDouble();
         final expandedHeight = constraints.hasBoundedHeight
-            ? (constraints.maxHeight - 24).clamp(48.0, 320.0)
+            ? (constraints.maxHeight - 24).clamp(48.0, 320.0).toDouble()
             : 320.0;
         final panelWidth = _isExpanded ? expandedWidth : 52.0;
         final panelHeight = _isExpanded ? expandedHeight : 52.0;
@@ -232,8 +234,13 @@ class _SessionView extends StatelessWidget {
                   controller: controller,
                   set: recommendation,
                 ),
+              if (snapshot.draft != null)
+                _DraftTile(controller: controller, draft: snapshot.draft!),
               for (final decision in snapshot.decisions.where(
-                (item) => item['status'] == 'pending',
+                (item) =>
+                    item['status'] == 'pending' &&
+                    !(snapshot.draft != null &&
+                        item['kind'] == 'apply_trip_draft'),
               ))
                 _DecisionTile(
                   controller: controller,
@@ -317,6 +324,70 @@ class _RecommendationTile extends StatelessWidget {
   }
 }
 
+class _DraftTile extends StatelessWidget {
+  const _DraftTile({required this.controller, required this.draft});
+
+  final AgentController controller;
+  final AgentTripDraft draft;
+
+  @override
+  Widget build(BuildContext context) {
+    final names = draft.placeNames;
+    return Card(
+      margin: const EdgeInsets.only(top: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.route_outlined),
+              title: Text(draft.title ?? '美食路线规划'),
+              subtitle: Text(
+                '${names.length} 个地点 · ${_draftStatusLabel(draft.status)}',
+              ),
+            ),
+            if (names.isNotEmpty) Text(names.join('、')),
+            for (final warning in draft.warnings)
+              Text(
+                warning,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed:
+                    draft.canApply &&
+                        draft.id.isNotEmpty &&
+                        draft.baseRevision != null
+                    ? () => unawaited(
+                        controller.applyDraft(
+                          draftId: draft.id,
+                          expectedRevision: draft.baseRevision!,
+                        ),
+                      )
+                    : null,
+                icon: const Icon(Icons.check),
+                label: const Text('应用草案'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _draftStatusLabel(String status) => switch (status) {
+  'proposed' => '待确认',
+  'shown_to_captain' => '待确认',
+  'applied' => '已应用',
+  'rejected' => '已拒绝',
+  _ => status,
+};
+
 class _DecisionTile extends StatelessWidget {
   const _DecisionTile({
     required this.controller,
@@ -350,13 +421,19 @@ class _DecisionTile extends StatelessWidget {
               child: Builder(
                 builder: (context) {
                   final optionId = option['id'] as String;
+                  final optionRevision =
+                      option['expectedRevision'] ?? option['expected_revision'];
+                  final optionExpectedRevision = optionRevision is num
+                      ? optionRevision.toInt()
+                      : expectedRevision;
                   return TextButton(
-                    onPressed: optionId == 'apply' && expectedRevision == null
+                    onPressed:
+                        optionId == 'apply' && optionExpectedRevision == null
                         ? null
                         : () => controller.resolveDecision(
                             decision,
                             optionId,
-                            expectedRevision: expectedRevision,
+                            expectedRevision: optionExpectedRevision,
                           ),
                     child: Text('${option['label'] ?? optionId}'),
                   );

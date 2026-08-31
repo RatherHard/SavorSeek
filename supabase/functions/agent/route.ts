@@ -6,7 +6,7 @@
  * TripDraft 需要 is_time_locked 之外的字段由队长确认后经 apply_trip_draft
  * 写入正式行程。
  */
-import type { RecommendationItem, VerifiedPlace } from './types.ts';
+import type { ParsedIntent, RecommendationItem, VerifiedPlace } from './types.ts';
 
 export interface RouteStop {
   name: string;
@@ -24,6 +24,29 @@ export interface RouteStop {
 export interface RouteResult {
   stops: RouteStop[];
   warnings: string[];
+}
+
+const MEAL_LABELS: Record<NonNullable<ParsedIntent['mealPeriod']>, string> = {
+  breakfast: '早餐',
+  lunch: '午餐',
+  afternoon_tea: '下午茶',
+  dinner: '晚餐',
+  late_night: '夜宵',
+};
+
+/** 根据已解析的结构化意图生成稳定、可落库的行程标题。 */
+export function routeTitle(
+  intent: ParsedIntent,
+  firstPlaceName?: string,
+): string {
+  const subject = intent.area ?? intent.city ?? intent.keywords ?? '';
+  const meal = intent.mealPeriod === null ? '' : MEAL_LABELS[intent.mealPeriod];
+  if (subject.length === 0 && firstPlaceName != null && firstPlaceName.length > 0) {
+    return `美食路线 · ${firstPlaceName}`.slice(0, 80);
+  }
+  if (subject.length === 0 && meal.length === 0) return '今日美食路线';
+  const suffix = meal || '美食路线';
+  return `${subject} · ${suffix}`.slice(0, 80);
 }
 
 /** 每站默认停留 90 分钟。 */

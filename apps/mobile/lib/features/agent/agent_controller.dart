@@ -65,7 +65,12 @@ class AgentController extends ChangeNotifier {
     String taskType = 'discover_places',
   }) async {
     final trimmed = text.trim();
-    if (_isSubmitting || trimmed.isEmpty || !auth.isSignedIn) return;
+    if (_isSubmitting ||
+        _isCreatingRouteTrip ||
+        trimmed.isEmpty ||
+        !auth.isSignedIn) {
+      return;
+    }
     final stableContext = AgentSubmitContext(
       mapViewport: context.mapViewport,
       selectedPlaceIds: List.unmodifiable(context.selectedPlaceIds),
@@ -165,8 +170,10 @@ class AgentController extends ChangeNotifier {
       _error = error.toString();
       notifyListeners();
     } finally {
-      _isCreatingRouteTrip = false;
-      notifyListeners();
+      if (!_isDisposed && generation == _lifecycleGeneration) {
+        _isCreatingRouteTrip = false;
+        notifyListeners();
+      }
     }
   }
 
