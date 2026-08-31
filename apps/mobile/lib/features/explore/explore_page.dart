@@ -46,6 +46,7 @@ class ExplorePage extends StatefulWidget {
     this.consent,
     this.agentController,
     this.locationService,
+    this.nearbyBootstrap,
     this.isActive = true,
   });
 
@@ -66,6 +67,7 @@ class ExplorePage extends StatefulWidget {
 
   final AgentController? agentController;
   final LocationService? locationService;
+  final NearbyRecommendationBootstrap? nearbyBootstrap;
   final bool isActive;
 
   @override
@@ -102,7 +104,7 @@ class _ExplorePageState extends State<ExplorePage> {
   String? _agentProjectionKey;
   DeviceLocation? _mapLocation;
   NearbyRecommendationBootstrap? _nearbyBootstrap;
-
+  bool get _ownsNearbyBootstrap => widget.nearbyBootstrap == null;
   @override
   void initState() {
     super.initState();
@@ -115,11 +117,13 @@ class _ExplorePageState extends State<ExplorePage> {
         ..addListener(_onSearchChanged);
     }
     if (widget.locationService != null && widget.agentController != null) {
-      _nearbyBootstrap = NearbyRecommendationBootstrap(
-        locationService: widget.locationService!,
-        agentController: widget.agentController!,
-        auth: widget.auth ?? const UnavailableAuthService(),
-      );
+      _nearbyBootstrap =
+          widget.nearbyBootstrap ??
+          NearbyRecommendationBootstrap(
+            locationService: widget.locationService!,
+            agentController: widget.agentController!,
+            auth: widget.auth ?? const UnavailableAuthService(),
+          );
       _nearbyBootstrap!.addListener(_onNearbyChanged);
     }
   }
@@ -200,7 +204,7 @@ class _ExplorePageState extends State<ExplorePage> {
     widget.favoriteController?.removeListener(_onFavoritesChanged);
     widget.agentController?.removeListener(_onAgentChanged);
     _nearbyBootstrap?.removeListener(_onNearbyChanged);
-    _nearbyBootstrap?.dispose();
+    if (_ownsNearbyBootstrap) _nearbyBootstrap?.dispose();
     _search?.dispose();
     super.dispose();
   }
@@ -467,16 +471,18 @@ class _ExplorePageState extends State<ExplorePage> {
       return AmapConsentNotice(onAgree: _consent.agree);
     }
 
-    if (_nearbyBootstrap?.isLoading == true) {
-      return Stack(
-        children: [
-          _buildMapSurface(),
+    return Stack(
+      children: [
+        // Keep the platform view in the same element slot while the location
+        // request is pending. Replacing AmapSurface with a loading widget
+        // disposes the native map and drops its location callback.
+        _buildMapSurface(),
+        if (_nearbyBootstrap?.isLoading == true) ...[
           const Positioned.fill(child: ColoredBox(color: Colors.black12)),
           const Center(child: CircularProgressIndicator()),
         ],
-      );
-    }
-    return _buildMapSurface();
+      ],
+    );
   }
 
   Widget _buildMapSurface() {

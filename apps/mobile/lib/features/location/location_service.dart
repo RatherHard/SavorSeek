@@ -61,9 +61,10 @@ abstract interface class LocationService {
 }
 
 class AmapLocationService implements LocationService {
-  AmapLocationService();
+  AmapLocationService({this.timeout = const Duration(seconds: 10)});
 
-  final Completer<DeviceLocation> _location = Completer<DeviceLocation>();
+  final Duration timeout;
+  Completer<DeviceLocation> _location = Completer<DeviceLocation>();
 
   void update(AMapLocation location) {
     if (_location.isCompleted) return;
@@ -76,14 +77,16 @@ class AmapLocationService implements LocationService {
       );
     } on LocationException catch (error) {
       _location.completeError(error);
+      _location = Completer<DeviceLocation>();
     }
   }
 
   @override
   Future<DeviceLocation> getCurrentLocation() async {
     try {
-      return await _location.future.timeout(const Duration(seconds: 10));
+      return await _location.future.timeout(timeout);
     } on TimeoutException {
+      _location = Completer<DeviceLocation>();
       throw const LocationException(
         '获取当前位置超时，请重试。',
         failure: LocationFailure.timeout,
