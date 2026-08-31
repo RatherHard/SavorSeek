@@ -6,7 +6,7 @@ import 'package:savorseek/features/places/favorites_controller.dart';
 import 'package:savorseek/features/places/place_models.dart';
 
 /// A map-preserving results drawer for the current search batch.
-class PlaceResultsDrawer extends StatelessWidget {
+class PlaceResultsDrawer extends StatefulWidget {
   const PlaceResultsDrawer({
     super.key,
     required this.places,
@@ -41,9 +41,53 @@ class PlaceResultsDrawer extends StatelessWidget {
   final VoidCallback? onRetryPartial;
 
   @override
+  State<PlaceResultsDrawer> createState() => _PlaceResultsDrawerState();
+}
+
+class _PlaceResultsDrawerState extends State<PlaceResultsDrawer> {
+  bool _isExpanded = true;
+
+  @override
   Widget build(BuildContext context) {
-    if (places.isEmpty && !isPartial) return const SizedBox.shrink();
+    if (widget.places.isEmpty && !widget.isPartial) {
+      return const SizedBox.shrink();
+    }
+
+    return AnimatedSwitcher(
+      duration: AppTokens.durationNormal,
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      child: _isExpanded ? _buildExpanded(context) : _buildCollapsed(context),
+    );
+  }
+
+  Widget _buildCollapsed(BuildContext context) {
+    final countLabel = '${widget.places.length} 个地点';
+    return Align(
+      key: const ValueKey('collapsed-place-results'),
+      alignment: Alignment.bottomCenter,
+      child: Padding(
+        padding: const EdgeInsets.all(AppTokens.spaceMd),
+        child: Card(
+          margin: EdgeInsets.zero,
+          clipBehavior: Clip.antiAlias,
+          child: Semantics(
+            button: true,
+            label: '展开地点列表，共$countLabel',
+            child: IconButton(
+              onPressed: () => setState(() => _isExpanded = true),
+              icon: const Icon(Icons.list_alt_outlined),
+              tooltip: '展开地点列表',
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildExpanded(BuildContext context) {
     return DraggableScrollableSheet(
+      key: const ValueKey('expanded-place-results'),
       initialChildSize: 0.12,
       minChildSize: 0.12,
       maxChildSize: 0.72,
@@ -80,20 +124,30 @@ class PlaceResultsDrawer extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: AppTokens.spaceSm),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        hasMore
-                            ? '已加载 ${places.length} 个地点'
-                            : '查看 ${places.length} 个地点',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            widget.hasMore
+                                ? '已加载 ${widget.places.length} 个地点'
+                                : '查看 ${widget.places.length} 个地点',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => setState(() => _isExpanded = false),
+                          icon: const Icon(Icons.expand_more),
+                          tooltip: '收起地点列表',
+                        ),
+                      ],
                     ),
-                    if (isPartial)
+                    if (widget.isPartial)
                       _DrawerNotice(
                         message: '部分地点已加载，部分区域暂不可用。',
-                        actionLabel: onRetryPartial == null ? null : '重试',
-                        onAction: onRetryPartial,
+                        actionLabel: widget.onRetryPartial == null
+                            ? null
+                            : '重试',
+                        onAction: widget.onRetryPartial,
                       ),
                   ],
                 ),
@@ -107,53 +161,55 @@ class PlaceResultsDrawer extends StatelessWidget {
                 AppTokens.spaceLg,
               ),
               sliver: SliverList.builder(
-                itemCount: places.length,
+                itemCount: widget.places.length,
                 itemBuilder: (context, index) {
-                  final place = places[index];
+                  final place = widget.places[index];
                   return Padding(
                     padding: const EdgeInsets.only(bottom: AppTokens.spaceSm),
                     child: PlaceCard(
                       place: place,
-                      isFavorite: favorites.isFavorite(place.id),
+                      isFavorite: widget.favorites.isFavorite(place.id),
                       isFavoritePending: _isPending(place.id),
-                      selected: place.id == selectedPlaceId,
-                      favoriteError: favorites.errorFor(place.id),
-                      onRetryFavorite: onRetryFavorite == null
+                      selected: place.id == widget.selectedPlaceId,
+                      favoriteError: widget.favorites.errorFor(place.id),
+                      onRetryFavorite: widget.onRetryFavorite == null
                           ? null
-                          : () => onRetryFavorite!(place.id),
+                          : () => widget.onRetryFavorite!(place.id),
                       onUnauthenticatedFavorite:
-                          onUnauthenticatedFavorite == null
+                          widget.onUnauthenticatedFavorite == null
                           ? null
-                          : () => onUnauthenticatedFavorite!(place.id),
-                      onSelected: () => onSelect(place),
-                      onToggleFavorite: onToggleFavorite == null
+                          : () => widget.onUnauthenticatedFavorite!(place.id),
+                      onSelected: () => widget.onSelect(place),
+                      onToggleFavorite: widget.onToggleFavorite == null
                           ? null
-                          : () => onToggleFavorite!(place.id),
+                          : () => widget.onToggleFavorite!(place.id),
                     ),
                   );
                 },
               ),
             ),
-            if (paginationError != null || hasMore)
+            if (widget.paginationError != null || widget.hasMore)
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.only(bottom: AppTokens.spaceLg),
                   child: Column(
                     children: [
-                      if (paginationError != null)
+                      if (widget.paginationError != null)
                         _DrawerNotice(
-                          message: paginationError!,
-                          actionLabel: onRetryPagination == null ? null : '重试',
-                          onAction: onRetryPagination,
+                          message: widget.paginationError!,
+                          actionLabel: widget.onRetryPagination == null
+                              ? null
+                              : '重试',
+                          onAction: widget.onRetryPagination,
                         ),
-                      if (hasMore)
-                        isLoadingMore
+                      if (widget.hasMore)
+                        widget.isLoadingMore
                             ? const Padding(
                                 padding: EdgeInsets.all(AppTokens.spaceMd),
                                 child: CircularProgressIndicator(),
                               )
                             : OutlinedButton.icon(
-                                onPressed: onLoadMore,
+                                onPressed: widget.onLoadMore,
                                 icon: const Icon(Icons.expand_more),
                                 label: const Text('加载更多'),
                               ),
@@ -168,7 +224,7 @@ class PlaceResultsDrawer extends StatelessWidget {
   }
 
   bool _isPending(String placeId) {
-    final state = favorites.mutationState(placeId);
+    final state = widget.favorites.mutationState(placeId);
     return state == FavoriteMutationState.saving ||
         state == FavoriteMutationState.removing;
   }

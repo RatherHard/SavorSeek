@@ -398,33 +398,36 @@ class _ExplorePageState extends State<ExplorePage> {
       if (widget.favoriteController != null &&
           (foodPlaces.isNotEmpty || _hasPartialResult(search)))
         Positioned.fill(
-          child: PlaceResultsDrawer(
-            places: foodPlaces,
-            favorites: widget.favoriteController!,
-            selectedPlaceId: selected?.id,
-            onSelect: _selectPlaceFromList,
-            onToggleFavorite: (placeId) =>
-                widget.favoriteController!.toggle(placeId),
-            onRetryFavorite: (placeId) =>
-                widget.favoriteController!.retry(placeId),
-            hasMore: search.hasMore,
-            isLoadingMore: search.isLoadingMore,
-            paginationError: search.state is PlaceSearchLoaded
-                ? (search.state as PlaceSearchLoaded).loadMoreError
-                : null,
-            onLoadMore: search.hasMore ? search.loadMore : null,
-            onRetryPagination:
-                search.state is PlaceSearchLoaded &&
-                    (search.state as PlaceSearchLoaded).loadMoreError != null
-                ? search.loadMore
-                : null,
-            isPartial: _hasPartialResult(search),
-            onRetryPartial: _hasPartialResult(search) ? search.retry : null,
-            onUnauthenticatedFavorite: widget.auth?.isSignedIn == false
-                ? (_) async {
-                    await showAuthSheet(context, auth: widget.auth!);
-                  }
-                : null,
+          child: Offstage(
+            offstage: selected != null,
+            child: PlaceResultsDrawer(
+              places: foodPlaces,
+              favorites: widget.favoriteController!,
+              selectedPlaceId: selected?.id,
+              onSelect: _selectPlaceFromList,
+              onToggleFavorite: (placeId) =>
+                  widget.favoriteController!.toggle(placeId),
+              onRetryFavorite: (placeId) =>
+                  widget.favoriteController!.retry(placeId),
+              hasMore: search.hasMore,
+              isLoadingMore: search.isLoadingMore,
+              paginationError: search.state is PlaceSearchLoaded
+                  ? (search.state as PlaceSearchLoaded).loadMoreError
+                  : null,
+              onLoadMore: search.hasMore ? search.loadMore : null,
+              onRetryPagination:
+                  search.state is PlaceSearchLoaded &&
+                      (search.state as PlaceSearchLoaded).loadMoreError != null
+                  ? search.loadMore
+                  : null,
+              isPartial: _hasPartialResult(search),
+              onRetryPartial: _hasPartialResult(search) ? search.retry : null,
+              onUnauthenticatedFavorite: widget.auth?.isSignedIn == false
+                  ? (_) async {
+                      await showAuthSheet(context, auth: widget.auth!);
+                    }
+                  : null,
+            ),
           ),
         ),
       if (selected != null)
